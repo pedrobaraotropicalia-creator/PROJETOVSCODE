@@ -1,7 +1,10 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { db } from './db';
-const email = (process.env.ADMIN_EMAIL || 'dono@empresa.com').toLowerCase();
-const exists = db.prepare('SELECT id FROM usuarios WHERE email=?').get(email);
-if (!exists) db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run('Dono do sistema', email, bcrypt.hashSync('TroqueEssaSenha123', 10), 'dono');
+const email = (process.env.ADMIN_EMAIL || 'pedrobaraotropicalia@gmail.com').toLowerCase();
+const senha = process.env.ADMIN_PASSWORD || 'Pedro14785*';
+const hash = bcrypt.hashSync(senha, 10);
+const existente: any = db.prepare('SELECT id FROM usuarios WHERE email=?').get(email);
+if (existente) db.prepare('UPDATE usuarios SET senha_hash=?, tipo=?, ativo=1 WHERE id=?').run(hash, 'dono', existente.id);
+else db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run('Dono do sistema', email, hash, 'dono');
 console.log(`Usuário dono preparado: ${email}`);
