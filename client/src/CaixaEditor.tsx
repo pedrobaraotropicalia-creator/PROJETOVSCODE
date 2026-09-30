@@ -1,0 +1,175 @@
+import { useEffect, useState } from 'react';
+import { NumericFormat } from 'react-number-format';
+import { money, request } from './api';
+
+type Unit = { id: number; nome: string };
+type Machine = { id: number; nome: string; numero: string; numero_serie: string };
+type Contagem = { etapa: 'abertura' | 'fechamento'; denominacao: number; quantidade: number };
+type Detalhe = {
+  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca: number };
+  entradas: { forma_pagamento: string; valor: number }[];
+  maquininhas: { maquininha_id: number; valor: number }[];
+  saidas: { valor: number; motivo: string }[];
+  contagens: Contagem[];
+};
+type Counts = Record<number, number | undefined>;
+
+const denominacoes = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
+const formasPagamento = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', refeicao: 'Refeição', alimentacao: 'Alimentação', dinheiro: 'Dinheiro' };
+const etapas = ['Abertura', 'Entradas', 'Maquininhas', 'Saídas', 'Contagem final', 'Revisão'];
+
+const countsFrom = (data: Detalhe | null, etapa: Contagem['etapa']) => Object.fromEntries((data?.contagens || []).filter((item) => item.etapa === etapa).map((item) => [item.denominacao, item.quantidade])) as Counts;
+const countsPayload = (counts: Counts) => denominacoes.map((denominacao) => ({ denominacao, quantidade: counts[denominacao] ?? 0 }));
+const stepsDone = (data: Detalhe) => [true, data.entradas.length > 0, data.maquininhas.length > 0, data.saidas.length > 0, data.contagens.some((item) => item.etapa === 'fechamento'), false];
+// saídas são opcionais: ao retomar um caixa, abre na primeira etapa obrigatória pendente ou na revisão
+const firstPendingStep = (data: Detalhe) => { const done = stepsDone(data); return [1, 2, 4].find((index) => !done[index]) ?? 5; };
+const countsTotal = (counts: Counts) => denominacoes.reduce((sum, denominacao) => sum + denominacao * (counts[denominacao] ?? 0), 0);
+
+function MoneyInput({ value, onChange, placeholder = 'R$ 0,00' }: { value: number | undefined; onChange: (value: number | undefined) => void; placeholder?: string }) {
+  return <NumericFormat value={value ?? ''} onValueChange={(values) => onChange(values.floatValue)} prefix="R$ " thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false} inputMode="decimal" placeholder={placeholder} />;
+}
+
+function QuantityInput({ value, onChange }: { value: number | undefined; onChange: (value: number | undefined) => void }) {
+  return <NumericFormat value={value ?? ''} onValueChange={(values) => onChange(values.floatValue)} thousandSeparator="." decimalSeparator="," decimalScale={0} allowNegative={false} inputMode="numeric" placeholder="Quantidade" />;
+}
+
+function CountGrid({ variant, kicker, title, description, counts, onChange }: { variant: Contagem['etapa']; kicker: string; title: string; description: string; counts: Counts; onChange: (counts: Counts) => void }) {
+  return <div className={`cash-count-box ${variant === 'abertura' ? 'cash-opening' : 'cash-closing'}`}>
+    <div className="cash-count-heading"><span className="cash-count-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div>
+    <div className="cash-count-grid">{denominacoes.map((denominacao) => <label key={denominacao}>{denominacao >= 2 ? 'Nota' : 'Moeda'} de {money(denominacao)}<QuantityInput value={counts[denominacao]} onChange={(value) => onChange({ ...counts, [denominacao]: value })} /></label>)}</div>
+    <strong className="cash-count-total">Total: {money(countsTotal(counts))}</strong>
+  </div>;
+}
+
+function AberturaStep({ data, units, onSubmit }: { data: Detalhe | null; units: Unit[]; onSubmit: (body: object) => void }) {
+  const [unit, setUnit] = useState(data ? String(data.fechamento.unidade_id) : '');
+  const [turno, setTurno] = useState(data?.fechamento.turno || 'ALMOÇO');
+  const [counts, setCounts] = useState(countsFrom(data, 'abertura'));
+  const changesUnit = data && unit !== String(data.fechamento.unidade_id) && data.maquininhas.length > 0;
+  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ unidade_id: Number(unit), turno, contagens: countsPayload(counts) }); }}>
+    <div className="form-grid">
+      <label>Unidade<select value={unit} onChange={(event) => setUnit(event.target.value)} required><option value="">Selecione</option>{units.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>
+      <label>Turno<select value={turno} onChange={(event) => setTurno(event.target.value)}><option value="ALMOÇO">ALMOÇO</option><option value="JANTAR">JANTAR</option></select></label>
+    </div>
+    {changesUnit && <div className="machine-note">Ao trocar a unidade, os relatórios de maquininhas já salvos neste caixa serão descartados.</div>}
+    <CountGrid variant="abertura" kicker="ETAPA 1" title="Dinheiro na abertura" description="Conte o dinheiro disponível antes de iniciar o caixa." counts={counts} onChange={setCounts} />
+    <div className="step-actions"><span /><button className="primary" type="submit">{data ? 'Salvar abertura' : 'Abrir caixa'}</button></div>
+  </form>;
+}
+
+function EntradasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object) => void }) {
+  const [values, setValues] = useState<Record<string, number | undefined>>(Object.fromEntries(data.entradas.map((item) => [item.forma_pagamento, item.valor])));
+  const total = Object.values(values).reduce((sum: number, value) => sum + (value ?? 0), 0);
+  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ entradas: Object.fromEntries(Object.keys(formasPagamento).map((forma) => [forma, values[forma] ?? 0])) }); }}>
+    <h3>Entradas no sistema</h3>
+    <p className="muted">Valores do relatório do sistema por forma de pagamento.</p>
+    <div className="money-grid">{Object.entries(formasPagamento).map(([forma, label]) => <label key={forma}>{label}<MoneyInput value={values[forma]} onChange={(value) => setValues({ ...values, [forma]: value })} /></label>)}</div>
+    <div className="step-actions"><strong>Total: {money(total)}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
+  </form>;
+}
+
+function MaquininhasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object) => void }) {
+  const unit = data.fechamento.unidade_id;
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [values, setValues] = useState<Record<number, number | undefined>>(Object.fromEntries(data.maquininhas.map((item) => [item.maquininha_id, item.valor])));
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ nome: '', numero: '', numero_serie: '' });
+  const [message, setMessage] = useState('');
+  const load = () => request(`/unidades/${unit}/maquininhas`).then(setMachines).catch((err) => setMessage(err.message));
+  useEffect(() => { load(); }, [unit]);
+  async function addMachine() {
+    setMessage('');
+    try { await request(`/unidades/${unit}/maquininhas`, { method: 'POST', body: JSON.stringify(form) }); setForm({ nome: '', numero: '', numero_serie: '' }); setShowForm(false); await load(); setMessage('Maquininha adicionada a esta unidade.'); } catch (err) { setMessage((err as Error).message); }
+  }
+  const total = machines.reduce((sum, machine) => sum + (values[machine.id] ?? 0), 0);
+  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ maquininhas: machines.map((machine) => ({ maquininha_id: machine.id, valor: values[machine.id] ?? 0 })) }); }}>
+    <div className="section-heading"><h3>Relatórios das maquininhas</h3><button type="button" className="ghost" onClick={() => setShowForm(!showForm)}>{showForm ? 'Fechar cadastro' : '+ Adicionar nova maquininha'}</button></div>
+    {showForm && <div className="machine-form">
+      <label>Nome<input placeholder="Ex.: SICREDI" value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} /></label>
+      <label>Número<input placeholder="Ex.: 1" value={form.numero} onChange={(event) => setForm({ ...form, numero: event.target.value })} /></label>
+      <label>Número de série<input placeholder="Ex.: ASD415H7" value={form.numero_serie} onChange={(event) => setForm({ ...form, numero_serie: event.target.value })} /></label>
+      <button type="button" className="primary" onClick={addMachine}>Salvar maquininha</button>
+    </div>}
+    {message && <div className="machine-note">{message}</div>}
+    {!machines.length && !showForm && <p className="muted">Nenhuma maquininha cadastrada em {data.fechamento.unidade_nome}.</p>}
+    {machines.map((machine) => <label className="machine-row" key={machine.id}><span><strong>{machine.nome}</strong> · nº {machine.numero} · série {machine.numero_serie}</span><MoneyInput value={values[machine.id]} onChange={(value) => setValues({ ...values, [machine.id]: value })} /></label>)}
+    <div className="step-actions"><strong>Total: {money(total)}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
+  </form>;
+}
+
+function SaidasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object) => void }) {
+  const [exits, setExits] = useState<{ valor: number | undefined; motivo: string }[]>(data.saidas.length ? data.saidas : [{ valor: undefined, motivo: '' }]);
+  const update = (index: number, change: Partial<(typeof exits)[number]>) => setExits(exits.map((item, itemIndex) => itemIndex === index ? { ...item, ...change } : item));
+  const filled = exits.filter((item) => (item.valor ?? 0) > 0 || item.motivo.trim());
+  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ saidas: filled.map((item) => ({ valor: item.valor ?? 0, motivo: item.motivo })) }); }}>
+    <h3>Saídas de dinheiro</h3>
+    <p className="muted">Retiradas do caixa durante o turno. Deixe em branco se não houve saídas.</p>
+    {exits.map((exit, index) => <div className="exit-row" key={index}><MoneyInput value={exit.valor} onChange={(valor) => update(index, { valor })} placeholder="Valor" /><input placeholder="Motivo" value={exit.motivo} onChange={(event) => update(index, { motivo: event.target.value })} /></div>)}
+    <button type="button" className="ghost" onClick={() => setExits([...exits, { valor: undefined, motivo: '' }])}>+ Adicionar saída</button>
+    <div className="step-actions"><strong>Total: {money(filled.reduce((sum, item) => sum + (item.valor ?? 0), 0))}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
+  </form>;
+}
+
+function ContagemFinalStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object) => void }) {
+  const [counts, setCounts] = useState(countsFrom(data, 'fechamento'));
+  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ contagens: countsPayload(counts) }); }}>
+    <CountGrid variant="fechamento" kicker="ETAPA 5" title="Dinheiro no fechamento" description="Conte novamente o dinheiro físico ao final do turno." counts={counts} onChange={setCounts} />
+    <div className="step-actions"><span /><button className="primary" type="submit">Salvar e continuar</button></div>
+  </form>;
+}
+
+function RevisaoStep({ data, onFinalize }: { data: Detalhe; onFinalize: () => void }) {
+  const close = data.fechamento;
+  const warnings = [
+    !data.entradas.length && 'As entradas do sistema não foram informadas.',
+    !data.maquininhas.length && 'Nenhum relatório de maquininha foi informado.',
+    !data.contagens.some((item) => item.etapa === 'fechamento') && 'A contagem final não foi feita: o dinheiro físico será considerado R$ 0,00.'
+  ].filter(Boolean) as string[];
+  return <div>
+    <div className="detail-grid">
+      <div><span>Saldo inicial</span><strong>{money(close.saldo_inicial)}</strong></div>
+      <div><span>Entradas do sistema</span><strong>{money(close.total_entradas)}</strong></div>
+      <div><span>Maquininhas</span><strong>{money(close.total_maquininhas)}</strong></div>
+      <div><span>Saídas</span><strong>{money(close.total_saidas)}</strong></div>
+      <div><span>Dinheiro físico</span><strong>{money(close.dinheiro_fisico)}</strong></div>
+    </div>
+    <div className="reconcile"><span>Diferença calculada</span><strong className={Math.abs(close.diferenca) < .01 ? 'green' : close.diferenca < 0 ? 'red' : 'orange'}>{money(close.diferenca)}</strong><small>{Math.abs(close.diferenca) < .01 ? 'Caixa bateu' : close.diferenca < 0 ? 'Falta no caixa' : 'Sobra no caixa'}</small></div>
+    {warnings.map((warning) => <div className="alert" key={warning}>{warning}</div>)}
+    <div className="step-actions"><span /><button className="primary" type="button" onClick={onFinalize}>Finalizar caixa</button></div>
+  </div>;
+}
+
+export default function CaixaEditor({ id, units, onExit, onFinalized }: { id: number | null; units: Unit[]; onExit: () => void; onFinalized: () => void }) {
+  const [caixaId, setCaixaId] = useState(id);
+  const [data, setData] = useState<Detalhe | null>(null);
+  const [step, setStep] = useState(0);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const load = (target: number) => request(`/fechamentos/${target}`).then((result: Detalhe) => { setData(result); return result; });
+  useEffect(() => { if (caixaId) load(caixaId).then((result) => { if (caixaId === id) setStep(firstPendingStep(result)); }).catch((err) => setError(err.message)); }, [caixaId]);
+  async function run(action: () => Promise<void>, message: string) {
+    setError(''); setNotice('');
+    try { await action(); setNotice(message); } catch (err) { setError((err as Error).message); }
+  }
+  const saveStep = (path: string) => (body: object) => run(async () => { await request(`/fechamentos/${caixaId}/${path}`, { method: 'PUT', body: JSON.stringify(body) }); await load(caixaId!); setStep(step + 1); }, 'Etapa salva.');
+  const openCaixa = (body: object) => run(async () => { const result = await request('/fechamentos', { method: 'POST', body: JSON.stringify(body) }); setCaixaId(result.id); setStep(1); }, 'Caixa aberto. As próximas etapas podem ser preenchidas agora ou mais tarde.');
+  const finalize = () => run(async () => { await request(`/fechamentos/${caixaId}/finalizar`, { method: 'POST' }); onFinalized(); }, '');
+  const done = data ? stepsDone(data) : [];
+  const ready = !caixaId || data;
+  return <section className="panel caixa-editor">
+    <div className="panel-heading">
+      <div><span className="eyebrow">{data ? `CAIXA #${data.fechamento.id} · ${data.fechamento.turno}` : 'NOVO CAIXA'}</span><h2>{data ? data.fechamento.unidade_nome : 'Abertura de caixa'}</h2></div>
+      <button className="ghost" type="button" onClick={onExit}>← Voltar</button>
+    </div>
+    <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setNotice(''); setError(''); }}>{index + 1}. {etapa}</button>)}</div>
+    {notice && <div className="machine-note">{notice}</div>}
+    {error && <div className="alert">{error}</div>}
+    {!ready && <p className="muted">Carregando caixa...</p>}
+    {ready && step === 0 && <AberturaStep key={caixaId ?? 'novo'} data={data} units={units} onSubmit={caixaId ? saveStep('abertura') : openCaixa} />}
+    {data && step === 1 && <EntradasStep data={data} onSubmit={saveStep('entradas')} />}
+    {data && step === 2 && <MaquininhasStep data={data} onSubmit={saveStep('maquininhas')} />}
+    {data && step === 3 && <SaidasStep data={data} onSubmit={saveStep('saidas')} />}
+    {data && step === 4 && <ContagemFinalStep data={data} onSubmit={saveStep('contagem-final')} />}
+    {data && step === 5 && <RevisaoStep data={data} onFinalize={finalize} />}
+  </section>;
+}

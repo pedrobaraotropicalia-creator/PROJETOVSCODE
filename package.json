@@ -19,6 +19,7 @@
     "jsonwebtoken": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "react-number-format": "^5.4.5",
     "zod": "latest"
   },
   "devDependencies": {

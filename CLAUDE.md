@@ -17,7 +17,11 @@ npm run build        # tsc do server -> server/dist; vite build -> dist/client
 npm start            # node server/dist/server.js (serve API e o SPA compilado)
 ```
 
-Não há testes, linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos.
+Não há testes, linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos. Para checar o client:
+
+```bash
+cd client && npx tsc --noEmit --ignoreConfig --jsx react-jsx --strict --skipLibCheck --module esnext --moduleResolution bundler --target es2022 --types vite/client src/*.tsx src/api.ts
+```
 
 Todas as dependências estão fixadas em `"latest"` no `package.json` — o `package-lock.json` é o que de fato define as versões.
 
@@ -38,7 +42,7 @@ Preparação (uma vez por worktree):
    ```
    `PORT` e `WEB_PORT` passados pelo ambiente têm prioridade sobre o `.env`.
 
-A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login com o dono de teste do `.env` e navegação até a tela alterada. Para testar o perfil de funcionário, cadastre um usuário pela tela de login.
+A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login e navegação até a tela alterada. Para o perfil de funcionário, cadastre um usuário `@caixa.test` pela tela de login com uma senha gerada na própria sessão. No modo automático, ler a senha do dono no `.env` é bloqueado; as telas exclusivas do dono (conferência, unidades, faturamento) só podem ser testadas se o usuário liberar essa leitura ou validar ele mesmo.
 
 ## Arquitetura
 
@@ -55,27 +59,36 @@ A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nom
 - JWT (`Authorization: Bearer`, 8h), payload só com `sub`; o middleware `auth` recarrega o usuário do banco a cada requisição.
 - Perfis (`tipo`): `funcionario`, `admin`, `dono`. O usuário cujo e-mail é igual a `ADMIN_EMAIL` é **sempre** tratado como `dono` por `publicUser`, independentemente do valor gravado.
 - Existe uma segunda dimensão, `cargo` (texto livre). `isCaixaOnly`: usuário com cargo `Caixa` (não dono) só vê os próprios fechamentos, mesmo sendo `admin`.
-- `allow(...roles)` restringe por `tipo`. Algumas rotas de escrita não usam `allow` e fazem a checagem de dono do registro dentro do handler.
+- `allow(...roles)` restringe por `tipo`. As rotas de fechamento usam `podeEditar`: dono, admin sem cargo Caixa ou quem abriu o caixa. As respostas de `GET /fechamentos` e `GET /fechamentos/:id` trazem `pode_editar` já calculado para o client.
 
 ### Fechamento de caixa
 
-Cálculo feito no server em POST e PUT de `/api/fechamentos` (lógica duplicada nos dois handlers):
+O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 
-```
-diferenca = dinheiro_fisico + total_maquininhas - (saldo_inicial + total_entradas - total_saidas)
-```
+| Etapa | Rota | Grava |
+|---|---|---|
+| Abertura | `POST /fechamentos` (cria), `PUT /fechamentos/:id/abertura` | unidade, turno, contagem → `saldo_inicial` |
+| Entradas | `PUT /fechamentos/:id/entradas` | formas de pagamento fixas → `total_entradas` |
+| Maquininhas | `PUT /fechamentos/:id/maquininhas` | só maquininhas ativas da unidade → `total_maquininhas` |
+| Saídas | `PUT /fechamentos/:id/saidas` | `total_saidas` (opcional) |
+| Contagem final | `PUT /fechamentos/:id/contagem-final` | contagem → `dinheiro_fisico` |
+| Finalizar | `POST /fechamentos/:id/finalizar` | `status='finalizado'` |
 
-O PUT apaga e reinsere todos os filhos (`entradas`, `detalhes_maquininha`, `saidas`, `contagens_dinheiro`). Status: `aberto` → `finalizado` (ao salvar) → `conferido` (por admin/dono via `/conferir`); `/reabrir` volta para `aberto`.
+- Os payloads são validados com zod. O error handler global converte `ZodError` em 400; não use `try/catch` por rota.
+- Cada PUT troca só os filhos da própria etapa e chama `salvarTotal`, a única fonte da fórmula (em SQL): `diferenca = dinheiro_fisico + total_maquininhas - (saldo_inicial + total_entradas - total_saidas)`. Negativa = falta, positiva = sobra.
+- `carregarEditavel` bloqueia a edição de caixa que não esteja `aberto` (409). Para editar, é preciso `/reabrir`.
+- Status: `aberto` → `finalizado` → `conferido` (admin/dono via `/conferir`, que recusa caixa aberto). `/reabrir` volta para `aberto`.
+- `finalizado_em` guarda a **primeira** finalização (`COALESCE`), então reabrir e finalizar de novo não muda o dia do caixa no faturamento. Caixas nunca finalizados ficam fora do faturamento.
 
 ### Client (`client/src/`)
 
-- `App.tsx` concentra quase todo o frontend. Boa parte do comportamento **não** está no JSX: há `useEffect`s que manipulam o DOM diretamente (injetam botões, o seletor de turno, o painel de contagem de cédulas, escondem campos por texto do label) e se comunicam por globais em `window`: `__editCloseId`, `__editingClose`, `__turno`, `__cashCounts`, `__showDelete`, `__showConsolidated`.
-- Consequências não óbvias:
-  - `request()` reescreve `POST /fechamentos` para `PUT /fechamentos/:id` quando `window.__editCloseId` está definido.
-  - O turno é salvo por um `PATCH /fechamentos/:id/turno` separado, disparado dentro de `request()` após o POST.
-  - `RevenueDashboard` é montado com um segundo `createRoot` num `div` injetado no DOM pelo botão de navegação criado via DOM (apenas para `dono`).
-- Antes de alterar a UI, procure pelo seletor CSS/texto afetado em todo o `App.tsx`: mudar um label ou classe pode quebrar silenciosamente um `querySelector` em outro `useEffect`.
-- `VITE_API_URL` define a base da API; sem ele o client usa `/api` (mesma origem, cenário de produção).
+- `api.ts` tem `request()` e `money()`. `CaixaEditor.tsx` é o editor em etapas, React puro: abre na primeira etapa obrigatória pendente e cada etapa salva e avança.
+- Inputs de dinheiro usam `MoneyInput` e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
+- `App.tsx` ainda tem hacks de DOM fora do fluxo do caixa:
+  - o botão "Consolidado" é injetado na `nav` e monta `RevenueDashboard` com um segundo `createRoot` (só para o dono);
+  - os botões "Excluir" do histórico são injetados por índice de linha.
+  - Antes de mudar classes ou textos, procure por `querySelector` que dependam deles.
+- `VITE_API_URL` define a base da API; sem ele o client usa `/api` (o proxy do Vite em dev, a mesma origem em produção).
 
 ## Deploy
 
