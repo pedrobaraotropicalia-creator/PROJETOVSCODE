@@ -11,20 +11,20 @@ Aplicacao web para controle de fechamento de caixa em rede de restaurantes. As u
 
 ```bash
 npm install
-copy .env.example .env
+cp .env.example .env
 npm run dev
 ```
 
 API: http://localhost:3000/api
 Frontend: http://localhost:5173
 
-Para preparar o usuario dono:
+Variaveis obrigatorias: `JWT_SECRET` e `ADMIN_EMAIL`. O servidor nao sobe sem elas.
+
+Para preparar o usuario dono, defina `ADMIN_EMAIL` e `ADMIN_PASSWORD` (minimo de 8 caracteres) no `.env` e rode:
 
 ```bash
-npx tsx server/src/seed.ts
+npm run server:seed
 ```
-
-A senha inicial do dono e `TroqueEssaSenha123`; altere-a apos o primeiro login.
 
 ## Producao
 

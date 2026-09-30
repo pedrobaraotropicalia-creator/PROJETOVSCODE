@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { db } from './db';
-const email = (process.env.ADMIN_EMAIL || 'pedrobaraotropicalia@gmail.com').toLowerCase();
-const senha = process.env.ADMIN_PASSWORD || 'Pedro14785*';
+const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+const senha = process.env.ADMIN_PASSWORD;
+if (!email || !senha) throw new Error('Defina ADMIN_EMAIL e ADMIN_PASSWORD para preparar o usuário dono.');
+if (senha.length < 8) throw new Error('ADMIN_PASSWORD deve ter pelo menos 8 caracteres.');
 const hash = bcrypt.hashSync(senha, 10);
 const existente: any = db.prepare('SELECT id FROM usuarios WHERE email=?').get(email);
 if (existente) db.prepare('UPDATE usuarios SET senha_hash=?, tipo=?, ativo=1 WHERE id=?').run(hash, 'dono', existente.id);
