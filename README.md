@@ -16,7 +16,7 @@ npm run dev
 ```
 
 API: http://localhost:3000/api
-Frontend: http://localhost:5173
+Frontend: http://localhost:5173 (o Vite repassa `/api` para a porta da API; `WEB_PORT` muda a porta do frontend)
 
 Variaveis obrigatorias: `JWT_SECRET` e `ADMIN_EMAIL`. O servidor nao sobe sem elas.
 

@@ -5,3 +5,5 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 npm-debug.log*
+.claude/launch.json
+.claude/worktrees/

@@ -11,8 +11,8 @@ Aplicação de fechamento de caixa para uma rede de restaurantes (unidades ofici
 ```bash
 npm install
 cp .env.example .env
-npm run dev          # API (tsx watch, porta do .env: 3000) + Vite (5173) em paralelo
-npm run server:seed  # cria/atualiza o usuário "dono" (ADMIN_EMAIL / ADMIN_PASSWORD)
+npm run dev          # API (tsx watch, PORT) + Vite (WEB_PORT, padrão 5173, com proxy /api -> PORT)
+npm run server:seed  # cria/atualiza o usuário "dono" (exige ADMIN_EMAIL e ADMIN_PASSWORD)
 npm run build        # tsc do server -> server/dist; vite build -> dist/client
 npm start            # node server/dist/server.js (serve API e o SPA compilado)
 ```
@@ -20,6 +20,25 @@ npm start            # node server/dist/server.js (serve API e o SPA compilado)
 Não há testes, linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos.
 
 Todas as dependências estão fixadas em `"latest"` no `package.json` — o `package-lock.json` é o que de fato define as versões.
+
+`JWT_SECRET` e `ADMIN_EMAIL` são obrigatórios: o server lança erro na inicialização sem eles.
+
+## Worktrees e preview (obrigatório em toda sessão)
+
+Várias sessões trabalham ao mesmo tempo, cada uma na sua worktree em `.claude/worktrees/<nome>`. Cada worktree roda o próprio app, com banco e portas próprios.
+
+**Ao terminar qualquer alteração, suba o app no painel do navegador e mostre a tela alterada, sem esperar o usuário pedir.**
+
+Preparação (uma vez por worktree):
+1. Crie um `.env` na raiz da worktree (ignorado pelo git) com `JWT_SECRET` aleatório, `ADMIN_EMAIL=dono@caixa.test` e `ADMIN_PASSWORD` aleatória. Não repita a senha no chat: ela fica só no `.env`.
+2. `npm install` e `npm run server:seed`. O banco `./data/caixa.db` é relativo à worktree, então cada uma tem o seu.
+3. Escolha duas portas livres (confira com `ss -ltn`) e crie `.claude/launch.json` (ignorado pelo git):
+   ```json
+   { "version": "0.0.1", "configurations": [ { "name": "<nome-da-worktree>", "runtimeExecutable": "env", "runtimeArgs": ["PORT=<api>", "WEB_PORT=<web>", "npm", "run", "dev"], "port": <web> } ] }
+   ```
+   `PORT` e `WEB_PORT` passados pelo ambiente têm prioridade sobre o `.env`.
+
+A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login com o dono de teste do `.env` e navegação até a tela alterada. Para testar o perfil de funcionário, cadastre um usuário pela tela de login.
 
 ## Arquitetura
 
