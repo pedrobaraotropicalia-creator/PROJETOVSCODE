@@ -169,4 +169,4 @@ app.use(express.static(clientDist));
 app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => { if (err instanceof ZodError) return res.status(400).json({ erro: err.issues[0].message }); console.error(err); res.status(500).json({ erro: 'Erro interno do servidor.' }); });
-app.listen(port, '0.0.0.0', () => console.log(`API rodando na porta ${port}`));
+app.listen(port, '0.0.0.0', (error) => { if (error) throw error; console.log(`API rodando na porta ${port}`); });
