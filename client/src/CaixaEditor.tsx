@@ -51,6 +51,7 @@ function AberturaStep({ data, units, onSubmit }: { data: Detalhe | null; units: 
       <label>Unidade<select value={unit} onChange={(event) => setUnit(event.target.value)} required><option value="">Selecione</option>{units.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>
       <label>Turno<select value={turno} onChange={(event) => setTurno(event.target.value)}><option value="ALMOÇO">ALMOÇO</option><option value="JANTAR">JANTAR</option></select></label>
     </div>
+    {!units.length && <div className="alert">Você ainda não está vinculado a nenhuma unidade. Peça ao dono para vincular você antes de abrir um caixa.</div>}
     {changesUnit && <div className="machine-note">Ao trocar a unidade, os relatórios de maquininhas já salvos neste caixa serão descartados.</div>}
     <CountGrid variant="abertura" kicker="ETAPA 1" title="Dinheiro na abertura" description="Conte o dinheiro disponível antes de iniciar o caixa." counts={counts} onChange={setCounts} />
     <div className="step-actions"><span /><button className="primary" type="submit">{data ? 'Salvar abertura' : 'Abrir caixa'}</button></div>

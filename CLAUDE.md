@@ -42,7 +42,7 @@ Preparação (uma vez por worktree):
    ```
    `PORT` e `WEB_PORT` passados pelo ambiente têm prioridade sobre o `.env`.
 
-A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login e navegação até a tela alterada. Para o perfil de funcionário, cadastre um usuário `@caixa.test` pela tela de login com uma senha gerada na própria sessão. No modo automático, ler a senha do dono no `.env` é bloqueado; as telas exclusivas do dono (conferência, unidades, faturamento) só podem ser testadas se o usuário liberar essa leitura ou validar ele mesmo.
+A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login e navegação até a tela alterada. Para o perfil de funcionário, cadastre um usuário `@caixa.test` pela tela de login com uma senha gerada na própria sessão. No modo automático, ler a senha do dono no `.env` é bloqueado. Para testar como dono, suba uma instância à parte com banco descartável no scratchpad e credenciais de teste criadas na sessão: `env DATABASE_FILE=<scratchpad>/t.db JWT_SECRET=<teste> ADMIN_EMAIL=<teste>@caixa.test PORT=<api> WEB_PORT=<web> npm run dev`, depois `ADMIN_PASSWORD=<teste> npm run server:seed` com o mesmo `DATABASE_FILE`. As variáveis do ambiente têm prioridade sobre o `.env`. Derrube essa instância ao terminar.
 
 ## Arquitetura
 
@@ -59,6 +59,8 @@ A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nom
 - JWT (`Authorization: Bearer`, 8h), payload só com `sub`; o middleware `auth` recarrega o usuário do banco a cada requisição.
 - Perfis (`tipo`): `funcionario`, `admin`, `dono`. O usuário cujo e-mail é igual a `ADMIN_EMAIL` é **sempre** tratado como `dono` por `publicUser`, independentemente do valor gravado.
 - Existe uma segunda dimensão, `cargo` (texto livre). `isCaixaOnly`: usuário com cargo `Caixa` (não dono) só vê os próprios fechamentos, mesmo sendo `admin`.
+- **Vínculo com unidades** (`usuario_unidades`, várias por usuário): funcionário e admin só enxergam e operam as unidades vinculadas (`GET /unidades`, maquininhas, caixas, abertura). O dono não tem restrição e é o único que altera vínculos (`PATCH /usuarios/:id` com `unidades`). Na criação da tabela, cada usuário foi vinculado às unidades onde já tinha caixa (`db.ts`, roda uma vez só).
+- Só o dono confere caixas (`/conferir`) e acessa o faturamento. O admin é supervisor operacional: vê usuários (só leitura), maquininhas e caixas das próprias unidades.
 - `allow(...roles)` restringe por `tipo`. As rotas de fechamento usam `podeEditar`: dono, admin sem cargo Caixa ou quem abriu o caixa. As respostas de `GET /fechamentos` e `GET /fechamentos/:id` trazem `pode_editar` já calculado para o client.
 
 ### Fechamento de caixa
@@ -82,7 +84,7 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 
 ### Client (`client/src/`)
 
-- `api.ts` tem `request()` e `money()`. `CaixaEditor.tsx` é o editor em etapas, React puro: abre na primeira etapa obrigatória pendente e cada etapa salva e avança.
+- `api.ts` tem `request()` e `money()`. `datas.ts` concentra datas: exibição sempre `DD/MM/AAAA` e `HH:mm` em 24h no fuso de Brasília (`formatDate`, `formatDateTime`, `formatDay`). Entrada de data/hora usa texto com máscara (`PatternFormat`) + `parseDateTime`; não use `<input type="datetime-local">`, que mostra AM/PM conforme o idioma do navegador. `CaixaEditor.tsx` é o editor em etapas, React puro: abre na primeira etapa obrigatória pendente e cada etapa salva e avança.
 - Inputs de dinheiro usam `MoneyInput` e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
 - `App.tsx` ainda tem hacks de DOM fora do fluxo do caixa:
   - o botão "Consolidado" é injetado na `nav` e monta `RevenueDashboard` com um segundo `createRoot` (só para o dono);

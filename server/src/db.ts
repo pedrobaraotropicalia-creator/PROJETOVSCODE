@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS contagens_dinheiro (id INTEGER PRIMARY KEY AUTOINCREM
 `);
 try { db.exec("ALTER TABLE fechamentos ADD COLUMN turno TEXT NOT NULL DEFAULT 'ALMOÇO'"); } catch { /* coluna já existe */ }
 try { db.exec('ALTER TABLE usuarios ADD COLUMN cargo TEXT'); } catch { /* coluna já existe */ }
+// na criação da tabela, cada usuário é vinculado às unidades onde já registrou caixa; depois disso só o dono altera os vínculos
+const vinculosNovos = !db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usuario_unidades'").get();
+db.transaction(() => {
+  db.exec('CREATE TABLE IF NOT EXISTS usuario_unidades (usuario_id INTEGER NOT NULL REFERENCES usuarios(id), unidade_id INTEGER NOT NULL REFERENCES unidades(id), PRIMARY KEY (usuario_id, unidade_id))');
+  if (vinculosNovos) db.exec('INSERT OR IGNORE INTO usuario_unidades (usuario_id, unidade_id) SELECT DISTINCT usuario_id, unidade_id FROM fechamentos');
+})();
 const unidadesOficiais = ['TERRA E MAR', 'RESTAURANTE E PIZZARIA', 'DELIVERY', 'DOCELATTO'];
 const garantirUnidades = db.transaction(() => {
   const add = db.prepare('INSERT OR IGNORE INTO unidades (nome, ativo) VALUES (?, 1)');
