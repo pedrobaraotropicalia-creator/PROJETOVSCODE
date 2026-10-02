@@ -20,6 +20,7 @@
     "react": "latest",
     "react-dom": "latest",
     "react-number-format": "^5.4.5",
+    "react-select": "^5.10.2",
     "zod": "latest"
   },
   "devDependencies": {
