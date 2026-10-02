@@ -24,6 +24,24 @@ db.transaction(() => {
   db.exec('CREATE TABLE IF NOT EXISTS usuario_unidades (usuario_id INTEGER NOT NULL REFERENCES usuarios(id), unidade_id INTEGER NOT NULL REFERENCES unidades(id), PRIMARY KEY (usuario_id, unidade_id))');
   if (vinculosNovos) db.exec('INSERT OR IGNORE INTO usuario_unidades (usuario_id, unidade_id) SELECT DISTINCT usuario_id, unidade_id FROM fechamentos');
 })();
+db.exec('CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)');
+db.prepare("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('tolerancia_dinheiro', '0'), ('fechamento_cego', '1')").run();
+
+// a diferença total se divide em quebra de dinheiro (gaveta) e divergência de cartões/Pix (maquininhas × entradas que não são dinheiro)
+const entradaDinheiro = "COALESCE((SELECT valor FROM entradas e WHERE e.fechamento_id=fechamentos.id AND e.forma_pagamento='dinheiro'), 0)";
+const recalcularDiferencasSql = `UPDATE fechamentos SET
+  diferenca_dinheiro = ROUND(dinheiro_fisico - (saldo_inicial + ${entradaDinheiro} - total_saidas), 2),
+  diferenca_cartoes = ROUND(total_maquininhas - (total_entradas - ${entradaDinheiro}), 2),
+  diferenca = ROUND(dinheiro_fisico + total_maquininhas - (saldo_inicial + total_entradas - total_saidas), 2)`;
+const colunasFechamento = (db.prepare('PRAGMA table_info(fechamentos)').all() as { name: string }[]).map((coluna) => coluna.name);
+if (!colunasFechamento.includes('diferenca_dinheiro')) db.transaction(() => {
+  db.exec('ALTER TABLE fechamentos ADD COLUMN diferenca_dinheiro REAL NOT NULL DEFAULT 0');
+  db.exec('ALTER TABLE fechamentos ADD COLUMN diferenca_cartoes REAL NOT NULL DEFAULT 0');
+  db.exec(recalcularDiferencasSql);
+})();
+const recalcularDiferencasStmt = db.prepare(`${recalcularDiferencasSql} WHERE id=?`);
+export const recalcularDiferencas = (id: number) => recalcularDiferencasStmt.run(id);
+
 const unidadesOficiais = ['TERRA E MAR', 'RESTAURANTE E PIZZARIA', 'DELIVERY', 'DOCELATTO'];
 const garantirUnidades = db.transaction(() => {
   const add = db.prepare('INSERT OR IGNORE INTO unidades (nome, ativo) VALUES (?, 1)');

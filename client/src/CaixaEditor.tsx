@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { NumericFormat } from 'react-number-format';
 import { money, request } from './api';
+import { MoneyInput, QuantityInput } from './inputs';
+import { corDiferenca, descreverQuebra, type Configuracoes } from './quebra';
 
 type Unit = { id: number; nome: string };
 type Machine = { id: number; nome: string; numero: string; numero_serie: string };
 type Contagem = { etapa: 'abertura' | 'fechamento'; denominacao: number; quantidade: number };
 type Detalhe = {
-  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca: number };
+  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
   entradas: { forma_pagamento: string; valor: number }[];
   maquininhas: { maquininha_id: number; valor: number }[];
   saidas: { valor: number; motivo: string }[];
@@ -24,14 +25,6 @@ const stepsDone = (data: Detalhe) => [true, data.entradas.length > 0, data.maqui
 // saídas são opcionais: ao retomar um caixa, abre na primeira etapa obrigatória pendente ou na revisão
 const firstPendingStep = (data: Detalhe) => { const done = stepsDone(data); return [1, 2, 4].find((index) => !done[index]) ?? 5; };
 const countsTotal = (counts: Counts) => denominacoes.reduce((sum, denominacao) => sum + denominacao * (counts[denominacao] ?? 0), 0);
-
-function MoneyInput({ value, onChange, placeholder = 'R$ 0,00' }: { value: number | undefined; onChange: (value: number | undefined) => void; placeholder?: string }) {
-  return <NumericFormat value={value ?? ''} onValueChange={(values) => onChange(values.floatValue)} prefix="R$ " thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false} inputMode="decimal" placeholder={placeholder} />;
-}
-
-function QuantityInput({ value, onChange }: { value: number | undefined; onChange: (value: number | undefined) => void }) {
-  return <NumericFormat value={value ?? ''} onValueChange={(values) => onChange(values.floatValue)} thousandSeparator="." decimalSeparator="," decimalScale={0} allowNegative={false} inputMode="numeric" placeholder="Quantidade" />;
-}
 
 function CountGrid({ variant, kicker, title, description, counts, onChange }: { variant: Contagem['etapa']; kicker: string; title: string; description: string; counts: Counts; onChange: (counts: Counts) => void }) {
   return <div className={`cash-count-box ${variant === 'abertura' ? 'cash-opening' : 'cash-closing'}`}>
@@ -119,7 +112,7 @@ function ContagemFinalStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body:
   </form>;
 }
 
-function RevisaoStep({ data, onFinalize }: { data: Detalhe; onFinalize: () => void }) {
+function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Configuracoes; onFinalize: () => void }) {
   const close = data.fechamento;
   const warnings = [
     !data.entradas.length && 'As entradas do sistema não foram informadas.',
@@ -134,13 +127,19 @@ function RevisaoStep({ data, onFinalize }: { data: Detalhe; onFinalize: () => vo
       <div><span>Saídas</span><strong>{money(close.total_saidas)}</strong></div>
       <div><span>Dinheiro físico</span><strong>{money(close.dinheiro_fisico)}</strong></div>
     </div>
-    <div className="reconcile"><span>Diferença calculada</span><strong className={Math.abs(close.diferenca) < .01 ? 'green' : close.diferenca < 0 ? 'red' : 'orange'}>{money(close.diferenca)}</strong><small>{Math.abs(close.diferenca) < .01 ? 'Caixa bateu' : close.diferenca < 0 ? 'Falta no caixa' : 'Sobra no caixa'}</small></div>
+    {close.diferenca_dinheiro === undefined
+      ? <div className="machine-note">Fechamento cego: a diferença é conferida pelo gestor depois que você finalizar. Confira se as contagens e os valores digitados estão corretos.</div>
+      : <>
+        <div className="reconcile"><span>Quebra de dinheiro</span><strong className={corDiferenca(close.diferenca_dinheiro)}>{money(close.diferenca_dinheiro)}</strong><small>Dinheiro contado − (saldo inicial + entradas em dinheiro − saídas)</small></div>
+        <div className="reconcile"><span>Cartões e Pix</span><strong className={corDiferenca(close.diferenca_cartoes ?? 0)}>{money(close.diferenca_cartoes ?? 0)}</strong><small>Maquininhas − entradas em cartão, Pix e vales</small></div>
+        <p className="muted detail-verdict">{descreverQuebra({ status: 'finalizado', ...close }, config)}</p>
+      </>}
     {warnings.map((warning) => <div className="alert" key={warning}>{warning}</div>)}
     <div className="step-actions"><span /><button className="primary" type="button" onClick={onFinalize}>Finalizar caixa</button></div>
   </div>;
 }
 
-export default function CaixaEditor({ id, units, onExit, onFinalized }: { id: number | null; units: Unit[]; onExit: () => void; onFinalized: () => void }) {
+export default function CaixaEditor({ id, units, config, onExit, onFinalized }: { id: number | null; units: Unit[]; config: Configuracoes; onExit: () => void; onFinalized: () => void }) {
   const [caixaId, setCaixaId] = useState(id);
   const [data, setData] = useState<Detalhe | null>(null);
   const [step, setStep] = useState(0);
@@ -171,6 +170,6 @@ export default function CaixaEditor({ id, units, onExit, onFinalized }: { id: nu
     {data && step === 2 && <MaquininhasStep data={data} onSubmit={saveStep('maquininhas')} />}
     {data && step === 3 && <SaidasStep data={data} onSubmit={saveStep('saidas')} />}
     {data && step === 4 && <ContagemFinalStep data={data} onSubmit={saveStep('contagem-final')} />}
-    {data && step === 5 && <RevisaoStep data={data} onFinalize={finalize} />}
+    {data && step === 5 && <RevisaoStep data={data} config={config} onFinalize={finalize} />}
   </section>;
 }

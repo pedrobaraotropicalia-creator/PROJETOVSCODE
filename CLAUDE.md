@@ -77,9 +77,14 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 | Finalizar | `POST /fechamentos/:id/finalizar` | `status='finalizado'` |
 
 - Os payloads são validados com zod. O error handler global converte `ZodError` em 400; não use `try/catch` por rota.
-- Cada PUT troca só os filhos da própria etapa e chama `salvarTotal`, a única fonte da fórmula (em SQL): `diferenca = dinheiro_fisico + total_maquininhas - (saldo_inicial + total_entradas - total_saidas)`. Negativa = falta, positiva = sobra.
+- Cada PUT troca só os filhos da própria etapa e chama `salvarTotal`, que usa `recalcularDiferencas` (`db.ts`), a única fonte das fórmulas (em SQL). Negativa = falta, positiva = sobra:
+  - `diferenca_dinheiro = dinheiro_fisico - (saldo_inicial + entrada 'dinheiro' - total_saidas)` (quebra da gaveta);
+  - `diferenca_cartoes = total_maquininhas - (total_entradas - entrada 'dinheiro')` (cartões, Pix e vales passam pelas maquininhas);
+  - `diferenca` = soma das duas. Não use a total para decidir se o caixa bateu: falta num lado compensada por sobra no outro daria zero.
+- "Bateu" (`client/src/quebra.ts`): quebra de dinheiro dentro da tolerância **e** cartões exatos (centavo). A tolerância (`tolerancia_dinheiro`) e o `fechamento_cego` ficam na tabela `configuracoes`, editadas só pelo dono (`GET/PUT /configuracoes`).
+- **Fechamento cego** (ligado por padrão): para quem não confere (funcionário e admin com cargo Caixa), `ocultarDiferencas` remove `diferenca*` das respostas da API e `GET /configuracoes` devolve `ve_diferenca: false`. O client trata campo ausente como "oculto"; nunca recalcule a diferença no client a partir dos totais.
 - `carregarEditavel` bloqueia a edição de caixa que não esteja `aberto` (409). Para editar, é preciso `/reabrir`.
-- Status: `aberto` → `finalizado` → `conferido` (admin/dono via `/conferir`, que recusa caixa aberto). `/reabrir` volta para `aberto`.
+- Status: `aberto` → `finalizado` → `conferido` (só o dono, via `/conferir`, que recusa caixa aberto). `/reabrir` volta para `aberto`.
 - `finalizado_em` guarda a **primeira** finalização (`COALESCE`), então reabrir e finalizar de novo não muda o dia do caixa no faturamento. Caixas nunca finalizados ficam fora do faturamento.
 
 ### Client (`client/src/`)
@@ -89,7 +94,8 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 - **Seleção de várias unidades** usa `UnitMultiSelect` (`react-select`, menu fica aberto enquanto marca, renderizado em portal para não ser cortado por modal). Seleção de uma unidade só (ex.: abertura de caixa) continua no `<select>` nativo.
 - **Modais**: ações no `.modal-footer` (rodapé fixo, alinhado à direita), botão secundário (`ghost`, ex.: Cancelar/Fechar) antes e ação principal por último. Escolhas que fazem parte do conteúdo (ex.: Conferido/Certo/Errado) ficam no corpo.
 - Menu lateral: recolhe para 72px só com os ícones (`.menu-recolhido`, preferência em `localStorage`, só no desktop); a data do dia fica abaixo do logo. Cada botão do menu precisa de `title` (vira a dica no modo recolhido) e do formato `ícone <span>rótulo</span>`, porque o CSS esconde o `span`.
-- Inputs de dinheiro usam `MoneyInput` e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
+- Relatórios (`Relatorios.tsx`, dono e admin que veem diferença): quebra por operador calculada no client sobre `GET /fechamentos` (que já vem filtrado por permissão), período padrão de 15 dias.
+- Inputs de dinheiro usam `MoneyInput` (`inputs.tsx`) e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
 - `App.tsx` ainda tem um hack de DOM: o botão "Consolidado" é injetado na `nav` e monta `RevenueDashboard` com um segundo `createRoot` (só para o dono). Antes de mudar classes ou textos do menu, procure por `querySelector` que dependam deles.
 - Filtros de "Caixas fechados" ficam em `passaNoFiltro` (`App.tsx`): unidades, situação (bateu/não bateu/falta/sobra, ignorando caixas em aberto, cuja diferença é parcial), status e turno. O botão Excluir é do próprio `CloseTable` (`onDeleted`), por id; não volte a associar ações a linhas por índice.
 - `VITE_API_URL` define a base da API; sem ele o client usa `/api` (o proxy do Vite em dev, a mesma origem em produção).

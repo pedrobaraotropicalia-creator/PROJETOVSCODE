@@ -21,6 +21,17 @@ const diaSemanaFormat = new Intl.DateTimeFormat('pt-BR', { timeZone: BRASILIA_TZ
 /** Dia da semana com inicial maiúscula, ex.: 'Sexta-feira' */
 export const formatWeekday = (value: Date) => { const dia = diaSemanaFormat.format(value); return dia.charAt(0).toUpperCase() + dia.slice(1); };
 
+/** Dia no fuso de Brasília como 'AAAA-MM-DD' (ordena e compara como texto) */
+export const diaBrasilia = (value: string | number | Date) => formatDate(value).split('/').reverse().join('-');
+/** 'DD/MM/AAAA' → 'AAAA-MM-DD', ou null se a data não existir */
+export function parseDate(text: string) {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
+  if (!match) return null;
+  const dia = `${match[3]}-${match[2]}-${match[1]}`;
+  const date = new Date(`${dia}T12:00:00${BRASILIA_OFFSET}`);
+  return !Number.isNaN(date.getTime()) && diaBrasilia(date) === dia ? dia : null;
+}
+
 /** 'DD/MM/AAAA HH:mm' no horário de Brasília → Date, ou null se a data não existir */
 export function parseDateTime(text: string) {
   const match = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(text);
