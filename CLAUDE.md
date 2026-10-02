@@ -85,6 +85,8 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 ### Client (`client/src/`)
 
 - `api.ts` tem `request()` e `money()`. `datas.ts` concentra datas: exibição sempre `DD/MM/AAAA` e `HH:mm` em 24h no fuso de Brasília (`formatDate`, `formatDateTime`, `formatDay`). Entrada de data/hora usa texto com máscara (`PatternFormat`) + `parseDateTime`; não use `<input type="datetime-local">`, que mostra AM/PM conforme o idioma do navegador. `CaixaEditor.tsx` é o editor em etapas, React puro: abre na primeira etapa obrigatória pendente e cada etapa salva e avança.
+- **Padrão de select**: todo `<select>` usa o `<select>` nativo, estilizado globalmente em `styles.css` (seta própria, 44px de altura, estados de foco e desabilitado, placeholder `value=""` em cinza). Não crie dropdown customizado nem estilize select por tela. O cargo do usuário é um select com a lista fixa de `cargoOptions` (`App.tsx`), validada no server (`cargos` em `server.ts`; as duas listas precisam andar juntas). Um cargo antigo fora da lista continua válido para quem já o tem.
+- Menu lateral: recolhe para 72px só com os ícones (`.menu-recolhido`, preferência em `localStorage`, só no desktop); a data do dia fica abaixo do logo. Cada botão do menu precisa de `title` (vira a dica no modo recolhido) e do formato `ícone <span>rótulo</span>`, porque o CSS esconde o `span`.
 - Inputs de dinheiro usam `MoneyInput` e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
 - `App.tsx` ainda tem hacks de DOM fora do fluxo do caixa:
   - o botão "Consolidado" é injetado na `nav` e monta `RevenueDashboard` com um segundo `createRoot` (só para o dono);
