@@ -90,10 +90,8 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 - **Modais**: ações no `.modal-footer` (rodapé fixo, alinhado à direita), botão secundário (`ghost`, ex.: Cancelar/Fechar) antes e ação principal por último. Escolhas que fazem parte do conteúdo (ex.: Conferido/Certo/Errado) ficam no corpo.
 - Menu lateral: recolhe para 72px só com os ícones (`.menu-recolhido`, preferência em `localStorage`, só no desktop); a data do dia fica abaixo do logo. Cada botão do menu precisa de `title` (vira a dica no modo recolhido) e do formato `ícone <span>rótulo</span>`, porque o CSS esconde o `span`.
 - Inputs de dinheiro usam `MoneyInput` e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
-- `App.tsx` ainda tem hacks de DOM fora do fluxo do caixa:
-  - o botão "Consolidado" é injetado na `nav` e monta `RevenueDashboard` com um segundo `createRoot` (só para o dono);
-  - os botões "Excluir" do histórico são injetados por índice de linha.
-  - Antes de mudar classes ou textos, procure por `querySelector` que dependam deles.
+- `App.tsx` ainda tem um hack de DOM: o botão "Consolidado" é injetado na `nav` e monta `RevenueDashboard` com um segundo `createRoot` (só para o dono). Antes de mudar classes ou textos do menu, procure por `querySelector` que dependam deles.
+- Filtros de "Caixas fechados" ficam em `passaNoFiltro` (`App.tsx`): unidades, situação (bateu/não bateu/falta/sobra, ignorando caixas em aberto, cuja diferença é parcial), status e turno. O botão Excluir é do próprio `CloseTable` (`onDeleted`), por id; não volte a associar ações a linhas por índice.
 - `VITE_API_URL` define a base da API; sem ele o client usa `/api` (o proxy do Vite em dev, a mesma origem em produção).
 
 ## Deploy
