@@ -4,7 +4,7 @@ export type Configuracoes = { tolerancia_dinheiro: number; fechamento_cego: bool
 /** Campos de diferença vêm ausentes da API quando o usuário não pode vê-los (fechamento cego). */
 export type Diferencas = { status: string; diferenca_dinheiro?: number; diferenca_cartoes?: number };
 
-const CENTAVO = 0.009;
+export const CENTAVO = 0.009;
 
 /** Falta ou sobra de dinheiro além da tolerância; null quando está dentro dela. */
 export const quebraDinheiro = (item: Diferencas, config: Configuracoes) => {

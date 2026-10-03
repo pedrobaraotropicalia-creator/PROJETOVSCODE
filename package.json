@@ -7,7 +7,8 @@
     "server:seed": "tsx server/src/seed.ts",
     "client:dev": "vite --config client/vite.config.ts",
     "build": "tsc -p server/tsconfig.json && vite build --config client/vite.config.ts",
-    "start": "node server/dist/server.js"
+    "start": "node server/dist/server.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -25,6 +26,7 @@
     "react-dom": "latest",
     "react-number-format": "^5.4.5",
     "react-select": "^5.10.2",
+    "recharts": "^3.10.1",
     "zod": "latest"
   },
   "devDependencies": {
@@ -38,6 +40,7 @@
     "concurrently": "latest",
     "tsx": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "vitest": "^5.0.3"
   }
 }
