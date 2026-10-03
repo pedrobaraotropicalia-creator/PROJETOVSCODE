@@ -102,7 +102,8 @@ export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emit
   for (let pagina = 1; pagina <= paginas; pagina += 1) {
     doc.setPage(pagina);
     doc.setFont('helvetica', 'normal').setFontSize(8).setTextColor(112, 131, 141);
-    doc.text(`Emitido em ${emitidoEm} por ${emitidoPor}`, MARGEM, alturaPagina - 8);
+    // uma linha só, sem invadir o "Página x de y" à direita
+    doc.text(doc.splitTextToSize(`Emitido em ${emitidoEm} por ${emitidoPor}`, larguraPagina - 2 * MARGEM - 30)[0], MARGEM, alturaPagina - 8);
     doc.text(`Página ${pagina} de ${paginas}`, larguraPagina - MARGEM, alturaPagina - 8, { align: 'right' });
   }
 

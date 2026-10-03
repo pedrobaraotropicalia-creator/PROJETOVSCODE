@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import { money, request } from './api';
 import { MoneyInput, QuantityInput } from './inputs';
 import MaquininhaForm from './MaquininhaForm';
+import { toast } from 'sonner';
 import { useDialogos } from './dialogos';
 import { Icone } from './icones';
 import { corDiferenca, descreverQuebra, formasPagamento, type Configuracoes } from './quebra';
+import { limites } from '../../server/src/limites';
 
 type Unit = { id: number; nome: string };
 type Machine = { id: number; nome: string; numero: string; numero_serie: string };
@@ -75,19 +77,18 @@ function MaquininhasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: o
   const [machines, setMachines] = useState<Machine[]>([]);
   const [values, setValues] = useState<Record<number, number | undefined>>(Object.fromEntries(data.maquininhas.map((item) => [item.maquininha_id, item.valor])));
   const [showForm, setShowForm] = useState(false);
-  const [message, setMessage] = useState('');
-  const load = () => request(`/unidades/${unit}/maquininhas`).then(setMachines).catch((err) => setMessage(err.message));
+  const [erro, setErro] = useState('');
+  const load = () => request(`/unidades/${unit}/maquininhas`).then(setMachines).catch((err) => setErro(err.message));
   useEffect(() => { load(); }, [unit]);
-  async function onMachineSaved() { setShowForm(false); await load(); setMessage('Maquininha adicionada a esta unidade.'); }
+  async function onMachineSaved() { setShowForm(false); await load(); toast.success('Maquininha adicionada a esta unidade.'); }
   const total = machines.reduce((sum, machine) => sum + (values[machine.id] ?? 0), 0);
-  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ maquininhas: machines.map((machine) => ({ maquininha_id: machine.id, valor: values[machine.id] ?? 0 })) }); }}>
-    <div className="section-heading"><h3>Relatórios das maquininhas</h3><button type="button" className="ghost" onClick={() => setShowForm(!showForm)}>{showForm ? 'Fechar cadastro' : <><Icone nome="adicionar" /> Adicionar nova maquininha</>}</button></div>
-    {showForm && <MaquininhaForm unidadeId={unit} onSaved={onMachineSaved} onError={setMessage} />}
-    {message && <div className="machine-note">{message}</div>}
-    {!machines.length && !showForm && <p className="muted">Nenhuma maquininha cadastrada em {data.fechamento.unidade_nome}.</p>}
+  return <><form onSubmit={(event) => { event.preventDefault(); onSubmit({ maquininhas: machines.map((machine) => ({ maquininha_id: machine.id, valor: values[machine.id] ?? 0 })) }); }}>
+    <div className="section-heading"><h3>Relatórios das maquininhas</h3><button type="button" className="ghost" onClick={() => setShowForm(true)}><Icone nome="adicionar" /> Adicionar nova maquininha</button></div>
+    {erro && <div className="alert">{erro}</div>}
+    {!machines.length && <p className="muted">Nenhuma maquininha cadastrada em {data.fechamento.unidade_nome}.</p>}
     {machines.map((machine) => <label className="machine-row" key={machine.id}><span><strong>{machine.nome}</strong> · nº {machine.numero} · série {machine.numero_serie}</span><MoneyInput value={values[machine.id]} onChange={(value) => setValues({ ...values, [machine.id]: value })} /></label>)}
     <div className="step-actions"><strong>Total: {money(total)}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
-  </form>;
+  </form>{showForm && <MaquininhaForm unidadeId={unit} onSaved={onMachineSaved} onClose={() => setShowForm(false)} />}</>;
 }
 
 function SaidasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object) => void }) {
@@ -97,8 +98,8 @@ function SaidasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object
   return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ saidas: filled.map((item) => ({ valor: item.valor ?? 0, motivo: item.motivo })) }); }}>
     <h3>Saídas de dinheiro</h3>
     <p className="muted">Retiradas do caixa durante o turno. Deixe em branco se não houve saídas.</p>
-    {exits.map((exit, index) => <div className="exit-row" key={index}><MoneyInput value={exit.valor} onChange={(valor) => update(index, { valor })} placeholder="Valor" /><input placeholder="Motivo" value={exit.motivo} onChange={(event) => update(index, { motivo: event.target.value })} /></div>)}
-    <button type="button" className="ghost" onClick={() => setExits([...exits, { valor: undefined, motivo: '' }])}><Icone nome="adicionar" /> Adicionar saída</button>
+    {exits.map((exit, index) => <div className="exit-row" key={index}><MoneyInput value={exit.valor} onChange={(valor) => update(index, { valor })} placeholder="Valor" /><input placeholder="Motivo" maxLength={limites.motivoSaida} value={exit.motivo} onChange={(event) => update(index, { motivo: event.target.value })} /></div>)}
+    <button type="button" className="ghost" disabled={exits.length >= limites.saidasPorCaixa} onClick={() => setExits([...exits, { valor: undefined, motivo: '' }])}><Icone nome="adicionar" /> Adicionar saída</button>
     <div className="step-actions"><strong>Total: {money(filled.reduce((sum, item) => sum + (item.valor ?? 0), 0))}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
   </form>;
 }
@@ -147,17 +148,17 @@ export default function CaixaEditor({ id, units, config, onExit, onFinalized }: 
   const [caixaId, setCaixaId] = useState(id);
   const [data, setData] = useState<Detalhe | null>(null);
   const [step, setStep] = useState(0);
-  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const load = (target: number) => request(`/fechamentos/${target}`).then((result: Detalhe) => { setData(result); return result; });
   useEffect(() => { if (caixaId) load(caixaId).then((result) => { if (caixaId === id) setStep(firstPendingStep(result)); }).catch((err) => setError(err.message)); }, [caixaId]);
-  async function run(action: () => Promise<void>, message: string) {
-    setError(''); setNotice('');
-    try { await action(); setNotice(message); } catch (err) { setError((err as Error).message); }
+  // sem mensagem, quem chamou avisa o resultado (ao finalizar, o toast vem do App)
+  async function run(action: () => Promise<void>, message?: string) {
+    setError('');
+    try { await action(); if (message) toast.success(message); } catch (err) { setError((err as Error).message); }
   }
   const saveStep = (path: string) => (body: object) => run(async () => { await request(`/fechamentos/${caixaId}/${path}`, { method: 'PUT', body: JSON.stringify(body) }); await load(caixaId!); setStep(step + 1); }, 'Etapa salva.');
   const openCaixa = (body: object) => run(async () => { const result = await request('/fechamentos', { method: 'POST', body: JSON.stringify(body) }); setCaixaId(result.id); setStep(1); }, 'Caixa aberto. As próximas etapas podem ser preenchidas agora ou mais tarde.');
-  const finalize = () => run(async () => { await request(`/fechamentos/${caixaId}/finalizar`, { method: 'POST' }); onFinalized(); }, '');
+  const finalize = () => run(async () => { await request(`/fechamentos/${caixaId}/finalizar`, { method: 'POST' }); onFinalized(); });
   const done = data ? stepsDone(data) : [];
   const ready = !caixaId || data;
   return <section className="panel caixa-editor">
@@ -165,8 +166,7 @@ export default function CaixaEditor({ id, units, config, onExit, onFinalized }: 
       <div><span className="eyebrow">{data ? `CAIXA #${data.fechamento.id} · ${data.fechamento.turno}` : 'NOVO CAIXA'}</span><h2>{data ? data.fechamento.unidade_nome : 'Abertura de caixa'}</h2></div>
       <button className="ghost" type="button" onClick={onExit}><Icone nome="voltar" /> Voltar</button>
     </div>
-    <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setNotice(''); setError(''); }}>{index + 1}. {etapa}{done[index] && <Icone nome="check" />}</button>)}</div>
-    {notice && <div className="machine-note">{notice}</div>}
+    <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setError(''); }}>{index + 1}. {etapa}{done[index] && <Icone nome="check" />}</button>)}</div>
     {error && <div className="alert">{error}</div>}
     {!ready && <p className="muted">Carregando caixa...</p>}
     {ready && step === 0 && <AberturaStep key={caixaId ?? 'novo'} data={data} units={units} onSubmit={caixaId ? saveStep('abertura') : openCaixa} />}

@@ -34,7 +34,7 @@ export default function ResumoColaboradores({ caixas, config, onSelecionar }: { 
   </>;
   return <div className="table-wrap"><table>
     <thead><tr><th>Colaborador</th><th>Caixas</th><th>Não bateram</th><th>Falta</th><th>Sobra</th><th>Quebra líquida</th><th>Diverg. cartões/Pix</th></tr></thead>
-    <tbody>{linhas.length ? linhas.map((linha) => <tr className="clickable-row" key={linha.usuario_id} title={`Ver os caixas de ${linha.nome}`} onClick={() => onSelecionar(linha.usuario_id)}><td><strong>{linha.nome}</strong></td>{celulas(linha)}</tr>) : <tr><td colSpan={7} className="empty">Nenhum caixa finalizado com os filtros selecionados.</td></tr>}</tbody>
+    <tbody>{linhas.length ? linhas.map((linha) => <tr className="clickable-row" key={linha.usuario_id} title={`Ver os caixas de ${linha.nome}`} onClick={() => onSelecionar(linha.usuario_id)}><td><strong className="texto-livre">{linha.nome}</strong></td>{celulas(linha)}</tr>) : <tr><td colSpan={7} className="empty">Nenhum caixa finalizado com os filtros selecionados.</td></tr>}</tbody>
     {linhas.length > 1 && <tfoot><tr className="report-total"><td><strong>Total</strong></td>{celulas(total)}</tr></tfoot>}
   </table></div>;
 }

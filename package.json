@@ -27,6 +27,7 @@
     "react-number-format": "^5.4.5",
     "react-select": "^5.10.2",
     "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
     "zod": "latest"
   },
   "devDependencies": {

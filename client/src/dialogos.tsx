@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 type Opcoes = { titulo: string; mensagem: ReactNode; confirmar?: string; cancelar?: string; perigo?: boolean };
-type OpcoesTexto = Opcoes & { rotulo: string; valor?: string };
+type OpcoesTexto = Opcoes & { rotulo: string; valor?: string; maxLength?: number };
 type Pedido =
   | { tipo: 'confirmar'; opcoes: Opcoes; responder: (confirmado: boolean) => void }
   | { tipo: 'aviso'; opcoes: Opcoes; responder: () => void }
@@ -55,7 +55,7 @@ function Dialogo({ pedido, fechar }: { pedido: Pedido; fechar: () => void }) {
     <form onSubmit={(event) => { event.preventDefault(); responder(true); }}>
       <h2 id="dialogo-titulo">{titulo}</h2>
       <div className="dialogo-mensagem">{mensagem}</div>
-      {pedido.tipo === 'texto' && <label>{pedido.opcoes.rotulo}<input autoFocus required value={texto} onChange={(event) => setTexto(event.target.value)} /></label>}
+      {pedido.tipo === 'texto' && <label>{pedido.opcoes.rotulo}<input autoFocus required maxLength={pedido.opcoes.maxLength} value={texto} onChange={(event) => setTexto(event.target.value)} /></label>}
       <div className="modal-footer">
         {pedido.tipo !== 'aviso' && <button type="button" className="ghost" autoFocus={perigo} onClick={() => responder(false)}>{cancelar}</button>}
         <button type="submit" className={perigo ? 'danger' : 'primary'} autoFocus={!perigo && pedido.tipo !== 'texto'}>{rotuloConfirmar}</button>
