@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { money, request } from './api';
 import { MoneyInput, QuantityInput } from './inputs';
-import { corDiferenca, descreverQuebra, type Configuracoes } from './quebra';
+import MaquininhaForm from './MaquininhaForm';
+import { useDialogos } from './dialogos';
+import { corDiferenca, descreverQuebra, formasPagamento, type Configuracoes } from './quebra';
 
 type Unit = { id: number; nome: string };
 type Machine = { id: number; nome: string; numero: string; numero_serie: string };
@@ -16,7 +18,6 @@ type Detalhe = {
 type Counts = Record<number, number | undefined>;
 
 const denominacoes = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
-const formasPagamento = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', refeicao: 'Refeição', alimentacao: 'Alimentação', dinheiro: 'Dinheiro' };
 const etapas = ['Abertura', 'Entradas', 'Maquininhas', 'Saídas', 'Contagem final', 'Revisão'];
 
 const countsFrom = (data: Detalhe | null, etapa: Contagem['etapa']) => Object.fromEntries((data?.contagens || []).filter((item) => item.etapa === etapa).map((item) => [item.denominacao, item.quantidade])) as Counts;
@@ -38,8 +39,14 @@ function AberturaStep({ data, units, onSubmit }: { data: Detalhe | null; units: 
   const [unit, setUnit] = useState(data ? String(data.fechamento.unidade_id) : '');
   const [turno, setTurno] = useState(data?.fechamento.turno || 'ALMOÇO');
   const [counts, setCounts] = useState(countsFrom(data, 'abertura'));
+  const { confirmar } = useDialogos();
   const changesUnit = data && unit !== String(data.fechamento.unidade_id) && data.maquininhas.length > 0;
-  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ unidade_id: Number(unit), turno, contagens: countsPayload(counts) }); }}>
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (changesUnit && !await confirmar({ titulo: 'Trocar a unidade do caixa', mensagem: <>Os valores de {data.maquininhas.length === 1 ? '1 maquininha' : `${data.maquininhas.length} maquininhas`} de <strong>{data.fechamento.unidade_nome}</strong> salvos neste caixa serão descartados, porque cada maquininha pertence a uma unidade. A etapa Maquininhas terá que ser preenchida de novo para <strong>{units.find((item) => String(item.id) === unit)?.nome}</strong>.</>, confirmar: 'Trocar unidade', perigo: true })) return;
+    onSubmit({ unidade_id: Number(unit), turno, contagens: countsPayload(counts) });
+  }
+  return <form onSubmit={submit}>
     <div className="form-grid">
       <label>Unidade<select value={unit} onChange={(event) => setUnit(event.target.value)} required><option value="">Selecione</option>{units.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>
       <label>Turno<select value={turno} onChange={(event) => setTurno(event.target.value)}><option value="ALMOÇO">ALMOÇO</option><option value="JANTAR">JANTAR</option></select></label>
@@ -67,23 +74,14 @@ function MaquininhasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: o
   const [machines, setMachines] = useState<Machine[]>([]);
   const [values, setValues] = useState<Record<number, number | undefined>>(Object.fromEntries(data.maquininhas.map((item) => [item.maquininha_id, item.valor])));
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ nome: '', numero: '', numero_serie: '' });
   const [message, setMessage] = useState('');
   const load = () => request(`/unidades/${unit}/maquininhas`).then(setMachines).catch((err) => setMessage(err.message));
   useEffect(() => { load(); }, [unit]);
-  async function addMachine() {
-    setMessage('');
-    try { await request(`/unidades/${unit}/maquininhas`, { method: 'POST', body: JSON.stringify(form) }); setForm({ nome: '', numero: '', numero_serie: '' }); setShowForm(false); await load(); setMessage('Maquininha adicionada a esta unidade.'); } catch (err) { setMessage((err as Error).message); }
-  }
+  async function onMachineSaved() { setShowForm(false); await load(); setMessage('Maquininha adicionada a esta unidade.'); }
   const total = machines.reduce((sum, machine) => sum + (values[machine.id] ?? 0), 0);
   return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ maquininhas: machines.map((machine) => ({ maquininha_id: machine.id, valor: values[machine.id] ?? 0 })) }); }}>
     <div className="section-heading"><h3>Relatórios das maquininhas</h3><button type="button" className="ghost" onClick={() => setShowForm(!showForm)}>{showForm ? 'Fechar cadastro' : '+ Adicionar nova maquininha'}</button></div>
-    {showForm && <div className="machine-form">
-      <label>Nome<input placeholder="Ex.: SICREDI" value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} /></label>
-      <label>Número<input placeholder="Ex.: 1" value={form.numero} onChange={(event) => setForm({ ...form, numero: event.target.value })} /></label>
-      <label>Número de série<input placeholder="Ex.: ASD415H7" value={form.numero_serie} onChange={(event) => setForm({ ...form, numero_serie: event.target.value })} /></label>
-      <button type="button" className="primary" onClick={addMachine}>Salvar maquininha</button>
-    </div>}
+    {showForm && <MaquininhaForm unidadeId={unit} onSaved={onMachineSaved} onError={setMessage} />}
     {message && <div className="machine-note">{message}</div>}
     {!machines.length && !showForm && <p className="muted">Nenhuma maquininha cadastrada em {data.fechamento.unidade_nome}.</p>}
     {machines.map((machine) => <label className="machine-row" key={machine.id}><span><strong>{machine.nome}</strong> · nº {machine.numero} · série {machine.numero_serie}</span><MoneyInput value={values[machine.id]} onChange={(value) => setValues({ ...values, [machine.id]: value })} /></label>)}
@@ -119,6 +117,11 @@ function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Conf
     !data.maquininhas.length && 'Nenhum relatório de maquininha foi informado.',
     !data.contagens.some((item) => item.etapa === 'fechamento') && 'A contagem final não foi feita: o dinheiro físico será considerado R$ 0,00.'
   ].filter(Boolean) as string[];
+  const { confirmar } = useDialogos();
+  async function finalizar() {
+    const ok = await confirmar({ titulo: 'Finalizar caixa', mensagem: <><p>Depois de finalizado, o caixa vai para a conferência do dono e só pode ser alterado se for reaberto.</p>{warnings.length > 0 && <ul className="dialogo-alertas">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}</>, confirmar: warnings.length ? 'Finalizar mesmo assim' : 'Finalizar caixa' });
+    if (ok) onFinalize();
+  }
   return <div>
     <div className="detail-grid">
       <div><span>Saldo inicial</span><strong>{money(close.saldo_inicial)}</strong></div>
@@ -135,7 +138,7 @@ function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Conf
         <p className="muted detail-verdict">{descreverQuebra({ status: 'finalizado', ...close }, config)}</p>
       </>}
     {warnings.map((warning) => <div className="alert" key={warning}>{warning}</div>)}
-    <div className="step-actions"><span /><button className="primary" type="button" onClick={onFinalize}>Finalizar caixa</button></div>
+    <div className="step-actions"><span /><button className="primary" type="button" onClick={finalizar}>Finalizar caixa</button></div>
   </div>;
 }
 

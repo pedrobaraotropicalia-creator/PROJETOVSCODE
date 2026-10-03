@@ -17,7 +17,16 @@ export const divergeCartoes = (item: Diferencas) => Math.abs(item.diferenca_cart
 /** null para caixa em aberto (diferença parcial) ou quando a diferença está oculta. */
 export const bateu = (item: Diferencas, config: Configuracoes) => item.status === 'aberto' || item.diferenca_dinheiro === undefined ? null : !quebraDinheiro(item, config) && !divergeCartoes(item);
 
-export const corDiferenca = (valor: number) => Math.abs(valor) <= CENTAVO ? 'green' : valor < 0 ? 'red' : 'orange';
+export const formasPagamento: Record<string, string> = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', refeicao: 'Refeição', alimentacao: 'Alimentação', dinheiro: 'Dinheiro' };
+
+export const statusCaixa = (item: Diferencas & { problema_resolvido: number | null }, config: Configuracoes) => {
+  if (item.status === 'aberto') return 'Em aberto';
+  if (item.status === 'conferido') return item.problema_resolvido === 1 ? 'Conferido/Certo' : item.problema_resolvido === 0 ? 'Conferido/Errado' : 'Conferido';
+  const resultado = bateu(item, config);
+  return resultado === null ? 'Finalizado' : resultado ? 'Bateu' : 'Pendente';
+};
+
+export const corDiferenca =(valor: number) => Math.abs(valor) <= CENTAVO ? 'green' : valor < 0 ? 'red' : 'orange';
 export const descreverQuebra = (item: Diferencas, config: Configuracoes) => {
   const quebra = quebraDinheiro(item, config);
   if (quebra) return `${quebra === 'falta' ? 'Falta' : 'Sobra'} de ${money(Math.abs(item.diferenca_dinheiro ?? 0))} no dinheiro`;

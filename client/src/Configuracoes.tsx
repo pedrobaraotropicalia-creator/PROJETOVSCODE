@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { request } from './api';
+import { money, request } from './api';
+import { useDialogos } from './dialogos';
 import { MoneyInput } from './inputs';
 import type { Configuracoes as Config } from './quebra';
 
@@ -8,8 +9,17 @@ export default function Configuracoes({ config, onSaved }: { config: Config; onS
   const [cego, setCego] = useState(config.fechamento_cego);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const { confirmar } = useDialogos();
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setMessage(''); setError('');
+    // as duas regras valem na leitura, então a mudança alcança também os caixas antigos
+    const mudancas = [];
+    if ((tolerancia ?? 0) !== config.tolerancia_dinheiro) mudancas.push(<li key="tolerancia">Tolerância de {money(config.tolerancia_dinheiro)} para {money(tolerancia ?? 0)}. Vale para <strong>todos os caixas, inclusive os já finalizados</strong>: a situação (bateu ou não), as diferenças pendentes e o relatório por operador são recalculados.</li>);
+    if (cego !== config.fechamento_cego) mudancas.push(cego
+      ? <li key="cego">Fechamento cego ligado: funcionários e quem tem cargo Caixa deixam de ver o valor esperado e a diferença, inclusive dos caixas anteriores.</li>
+      : <li key="cego">Fechamento cego desligado: funcionários e quem tem cargo Caixa passam a ver o valor esperado e a diferença de todos os caixas deles, inclusive os anteriores.</li>);
+    if (!mudancas.length) { setMessage('Nenhuma alteração para salvar.'); return; }
+    if (!await confirmar({ titulo: 'Salvar regras de fechamento', mensagem: <ul className="dialogo-alertas">{mudancas}</ul>, confirmar: 'Salvar' })) return;
     try { onSaved(await request('/configuracoes', { method: 'PUT', body: JSON.stringify({ tolerancia_dinheiro: tolerancia ?? 0, fechamento_cego: cego }) })); setMessage('Configurações salvas.'); } catch (err) { setError((err as Error).message); }
   }
   return <section className="panel settings-panel">
