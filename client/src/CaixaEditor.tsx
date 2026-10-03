@@ -23,7 +23,7 @@ type Counts = Record<number, number | undefined>;
 const denominacoes = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
 const etapas = ['Abertura', 'Entradas', 'Maquininhas', 'Saídas', 'Contagem final', 'Revisão'];
 
-const countsFrom = (data: Detalhe | null, etapa: Contagem['etapa']) => Object.fromEntries((data?.contagens || []).filter((item) => item.etapa === etapa).map((item) => [item.denominacao, item.quantidade])) as Counts;
+const countsFrom = (data: { contagens: Contagem[] } | null, etapa: Contagem['etapa']) => Object.fromEntries((data?.contagens || []).filter((item) => item.etapa === etapa).map((item) => [item.denominacao, item.quantidade])) as Counts;
 const countsPayload = (counts: Counts) => denominacoes.map((denominacao) => ({ denominacao, quantidade: counts[denominacao] ?? 0 }));
 const stepsDone = (data: Detalhe) => [true, data.entradas.length > 0, data.maquininhas.length > 0, data.saidas.length > 0, data.contagens.some((item) => item.etapa === 'fechamento'), false];
 // saídas são opcionais: ao retomar um caixa, abre na primeira etapa obrigatória pendente ou na revisão
@@ -142,6 +142,41 @@ function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Conf
     {warnings.map((warning) => <div className="alert" key={warning}>{warning}</div>)}
     <div className="step-actions"><span /><button className="primary" type="button" onClick={finalizar}>Finalizar caixa</button></div>
   </div>;
+}
+
+type DetalheConsulta = Omit<Detalhe, 'maquininhas' | 'saidas'> & { maquininhas: { id: number; nome: string; numero: string; numero_serie: string; valor: number }[]; saidas: { id: number; valor: number; motivo: string }[] };
+export const etapasConsulta = etapas.slice(0, 5);
+const nada = () => {};
+// na consulta, cédula não contada aparece como 0, não como campo a preencher
+const contagemGravada = (data: DetalheConsulta, etapa: Contagem['etapa']) => { const counts = countsFrom(data, etapa); return Object.fromEntries(denominacoes.map((denominacao) => [denominacao, counts[denominacao] ?? 0])) as Counts; };
+
+/** Etapa de um caixa já gravado, só leitura, com o mesmo visual do editor (consulta do fechamento). */
+export function EtapaSomenteLeitura({ etapa, data }: { etapa: number; data: DetalheConsulta }) {
+  const close = data.fechamento;
+  const conteudo = [
+    () => <>
+      <div className="form-grid"><label>Unidade<input value={close.unidade_nome} readOnly /></label><label>Turno<input value={close.turno} readOnly /></label></div>
+      <CountGrid variant="abertura" kicker="ETAPA 1" title="Dinheiro na abertura" description="Dinheiro contado na gaveta ao abrir o caixa." counts={contagemGravada(data, 'abertura')} onChange={nada} />
+    </>,
+    () => <>
+      <h3>Entradas no sistema</h3>
+      <p className="muted">Valores do relatório do sistema por forma de pagamento.</p>
+      <div className="money-grid">{Object.entries(formasPagamento).map(([forma, label]) => <label key={forma}>{label}<MoneyInput value={data.entradas.find((item) => item.forma_pagamento === forma)?.valor ?? 0} onChange={nada} /></label>)}</div>
+      <div className="step-actions"><strong>Total: {money(close.total_entradas)}</strong></div>
+    </>,
+    () => <>
+      <h3>Relatórios das maquininhas</h3>
+      {data.maquininhas.length ? data.maquininhas.map((machine) => <label className="machine-row" key={machine.id}><span><strong>{machine.nome}</strong> · nº {machine.numero} · série {machine.numero_serie}</span><MoneyInput value={machine.valor} onChange={nada} /></label>) : <p className="muted">Nenhuma maquininha informada.</p>}
+      <div className="step-actions"><strong>Total: {money(close.total_maquininhas)}</strong></div>
+    </>,
+    () => <>
+      <h3>Saídas de dinheiro</h3>
+      {data.saidas.length ? data.saidas.map((exit) => <div className="exit-row" key={exit.id}><MoneyInput value={exit.valor} onChange={nada} /><input value={exit.motivo} readOnly /></div>) : <p className="muted">Nenhuma saída registrada.</p>}
+      <div className="step-actions"><strong>Total: {money(close.total_saidas)}</strong></div>
+    </>,
+    () => <CountGrid variant="fechamento" kicker="ETAPA 5" title="Dinheiro no fechamento" description="Dinheiro físico contado ao final do turno." counts={contagemGravada(data, 'fechamento')} onChange={nada} />
+  ][etapa];
+  return <fieldset className="somente-leitura" disabled>{conteudo()}</fieldset>;
 }
 
 export default function CaixaEditor({ id, units, config, onExit, onFinalized }: { id: number | null; units: Unit[]; config: Configuracoes; onExit: () => void; onFinalized: () => void }) {
