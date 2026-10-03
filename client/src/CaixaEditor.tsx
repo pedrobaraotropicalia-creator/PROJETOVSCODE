@@ -3,6 +3,7 @@ import { money, request } from './api';
 import { MoneyInput, QuantityInput } from './inputs';
 import MaquininhaForm from './MaquininhaForm';
 import { useDialogos } from './dialogos';
+import { Icone } from './icones';
 import { corDiferenca, descreverQuebra, formasPagamento, type Configuracoes } from './quebra';
 
 type Unit = { id: number; nome: string };
@@ -80,7 +81,7 @@ function MaquininhasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: o
   async function onMachineSaved() { setShowForm(false); await load(); setMessage('Maquininha adicionada a esta unidade.'); }
   const total = machines.reduce((sum, machine) => sum + (values[machine.id] ?? 0), 0);
   return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ maquininhas: machines.map((machine) => ({ maquininha_id: machine.id, valor: values[machine.id] ?? 0 })) }); }}>
-    <div className="section-heading"><h3>Relatórios das maquininhas</h3><button type="button" className="ghost" onClick={() => setShowForm(!showForm)}>{showForm ? 'Fechar cadastro' : '+ Adicionar nova maquininha'}</button></div>
+    <div className="section-heading"><h3>Relatórios das maquininhas</h3><button type="button" className="ghost" onClick={() => setShowForm(!showForm)}>{showForm ? 'Fechar cadastro' : <><Icone nome="adicionar" /> Adicionar nova maquininha</>}</button></div>
     {showForm && <MaquininhaForm unidadeId={unit} onSaved={onMachineSaved} onError={setMessage} />}
     {message && <div className="machine-note">{message}</div>}
     {!machines.length && !showForm && <p className="muted">Nenhuma maquininha cadastrada em {data.fechamento.unidade_nome}.</p>}
@@ -97,7 +98,7 @@ function SaidasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object
     <h3>Saídas de dinheiro</h3>
     <p className="muted">Retiradas do caixa durante o turno. Deixe em branco se não houve saídas.</p>
     {exits.map((exit, index) => <div className="exit-row" key={index}><MoneyInput value={exit.valor} onChange={(valor) => update(index, { valor })} placeholder="Valor" /><input placeholder="Motivo" value={exit.motivo} onChange={(event) => update(index, { motivo: event.target.value })} /></div>)}
-    <button type="button" className="ghost" onClick={() => setExits([...exits, { valor: undefined, motivo: '' }])}>+ Adicionar saída</button>
+    <button type="button" className="ghost" onClick={() => setExits([...exits, { valor: undefined, motivo: '' }])}><Icone nome="adicionar" /> Adicionar saída</button>
     <div className="step-actions"><strong>Total: {money(filled.reduce((sum, item) => sum + (item.valor ?? 0), 0))}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
   </form>;
 }
@@ -162,9 +163,9 @@ export default function CaixaEditor({ id, units, config, onExit, onFinalized }: 
   return <section className="panel caixa-editor">
     <div className="panel-heading">
       <div><span className="eyebrow">{data ? `CAIXA #${data.fechamento.id} · ${data.fechamento.turno}` : 'NOVO CAIXA'}</span><h2>{data ? data.fechamento.unidade_nome : 'Abertura de caixa'}</h2></div>
-      <button className="ghost" type="button" onClick={onExit}>← Voltar</button>
+      <button className="ghost" type="button" onClick={onExit}><Icone nome="voltar" /> Voltar</button>
     </div>
-    <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setNotice(''); setError(''); }}>{index + 1}. {etapa}</button>)}</div>
+    <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setNotice(''); setError(''); }}>{index + 1}. {etapa}{done[index] && <Icone nome="check" />}</button>)}</div>
     {notice && <div className="machine-note">{notice}</div>}
     {error && <div className="alert">{error}</div>}
     {!ready && <p className="muted">Carregando caixa...</p>}

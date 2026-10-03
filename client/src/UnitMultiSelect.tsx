@@ -1,9 +1,10 @@
 import Select, { components, type OptionProps, type StylesConfig } from 'react-select';
+import { Icone } from './icones';
 
 type Unit = { id: number; nome: string };
 type Opcao = { value: number; label: string };
 
-const OpcaoComCheckbox = (props: OptionProps<Opcao, true>) => <components.Option {...props}><span className="multi-check" aria-hidden="true">{props.isSelected ? '✓' : ''}</span>{props.label}</components.Option>;
+const OpcaoComCheckbox = (props: OptionProps<Opcao, true>) => <components.Option {...props}><span className="multi-check" aria-hidden="true">{props.isSelected && <Icone nome="check" />}</span>{props.label}</components.Option>;
 
 // mesmo visual do padrão de select em styles.css
 const estilos: StylesConfig<Opcao, true> = {
