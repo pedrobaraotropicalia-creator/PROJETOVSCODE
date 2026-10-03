@@ -4,7 +4,7 @@ Aplicacao web para controle de fechamento de caixa em rede de restaurantes. As u
 
 ## Requisitos
 
-- Node.js 20 ou superior
+- Node.js 22.12 ou superior (o `better-sqlite3` 13 e o `vitest` 5 exigem Node 22)
 - npm 10 ou superior
 
 ## Rodar localmente
@@ -40,12 +40,12 @@ Use um processo como PM2, Nginx e HTTPS (Certbot). Mantenha o arquivo SQLite em 
 
 1. Crie um projeto no Google Cloud, ative faturamento e Compute Engine API.
 2. Crie uma VM Ubuntu `e2-small` e reserve IP estatico.
-3. Instale Node.js 20+, Git, Nginx e PM2.
-4. Clone o repositorio e execute `npm ci`, configure `.env`, crie a pasta persistente do SQLite e rode `npm run build`.
+3. Instale Node.js 22.12+, Git, Nginx e PM2.
+4. Clone o repositorio e execute `npm ci --ignore-scripts` (o `better-sqlite3` ja traz o binario pronto; sem a opcao o npm tenta compilar e falha sem Python e compilador), configure `.env`, crie a pasta persistente do SQLite e rode `npm run build`.
 5. Inicie com `pm2 start server/dist/server.js --name fechamento-caixa` e `pm2 save`.
 6. Configure Nginx como proxy para `localhost:3000`.
 7. Libere somente TCP 80 e 443 no firewall.
 8. Rode `sudo certbot --nginx -d seu-dominio.com` para HTTPS.
-9. Para atualizar: `git pull`, `npm ci`, `npm run build` e `pm2 restart fechamento-caixa`.
+9. Para atualizar: `git pull`, `npm ci --ignore-scripts`, `npm run build` e `pm2 restart fechamento-caixa`.
 
 Cloud Run nao deve usar SQLite no filesystem temporario. Para Cloud Run, migre o Prisma/SQLite para PostgreSQL no Cloud SQL ou monte armazenamento persistente com uma estrategia de bloqueio adequada.

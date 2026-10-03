@@ -24,7 +24,7 @@ const consulta = (de: string, ate: string, unidades: number[]) => `/relatorios/c
 
 export type DadosRelatorio = { caixas: CaixaRelatorio[]; anteriores: CaixaRelatorio[]; unidades: UnidadeRelatorio[]; todasUnidades: UnidadeRelatorio[]; de: string; ate: string; config: Configuracoes };
 
-export default function Relatorios({ units, config }: { units: UnidadeRelatorio[]; config: Configuracoes }) {
+export default function Relatorios({ units, config, recarga }: { units: UnidadeRelatorio[]; config: Configuracoes; recarga: number }) {
   const [atalho, setAtalho] = useState<Atalho>('30');
   const [periodo, setPeriodo] = useState(() => periodoDoAtalho('30'));
   const [textos, setTextos] = useState(() => ({ de: formatDay(periodo.de), ate: formatDay(periodo.ate) }));
@@ -34,7 +34,7 @@ export default function Relatorios({ units, config }: { units: UnidadeRelatorio[
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState('');
 
-  // recarrega a cada mudança de período ou unidades; resposta de um filtro já trocado é descartada
+  // recarrega a cada mudança de período ou unidades e a cada clique no menu; resposta de um filtro já trocado é descartada
   useEffect(() => {
     let atual = true;
     const anterior = periodoAnterior(periodo.de, periodo.ate);
@@ -44,7 +44,7 @@ export default function Relatorios({ units, config }: { units: UnidadeRelatorio[
       .catch((err) => { if (atual) setErro((err as Error).message); })
       .finally(() => { if (atual) setCarregando(false); });
     return () => { atual = false; };
-  }, [periodo.de, periodo.ate, selecionadas]);
+  }, [periodo.de, periodo.ate, selecionadas, recarga]);
 
   function escolherAtalho(proximo: Exclude<Atalho, 'personalizado'>) {
     const novo = periodoDoAtalho(proximo);

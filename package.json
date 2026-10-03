@@ -10,6 +10,9 @@
     "start": "node server/dist/server.js",
     "test": "vitest run"
   },
+  "engines": {
+    "node": ">=22.12"
+  },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
     "bcryptjs": "latest",

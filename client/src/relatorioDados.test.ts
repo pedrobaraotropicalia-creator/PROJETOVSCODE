@@ -35,7 +35,7 @@ describe('resumo', () => {
       caixa({ status: 'aberto', diferenca_dinheiro: -500 })
     ], config);
     expect(r.faturamento).toBe(3000);
-    expect(r.quebraDinheiro).toBe(-7);
+    expect(r.dinheiro).toEqual({ falta: 10, sobra: 3 });
     expect(r.foraDaTolerancia).toBe(1);
   });
   it('conta divergência de cartões mesmo de centavos e os pendentes de conferência', () => {
@@ -48,8 +48,14 @@ describe('resumo', () => {
     expect(r.aguardandoConferencia).toBe(2);
     expect(r.pendentes).toBe(1);
   });
+  it('falta de um caixa não é compensada pela sobra de outro', () => {
+    const r = resumo([caixa({ diferenca_dinheiro: -100, diferenca_cartoes: 50 }), caixa({ diferenca_dinheiro: 100, diferenca_cartoes: -50 })], config);
+    expect(r.dinheiro).toEqual({ falta: 100, sobra: 100 });
+    expect(r.cartoes).toEqual({ falta: 50, sobra: 50 });
+    expect(r.foraDaTolerancia).toBe(2);
+  });
   it('período vazio dá tudo zero', () => {
-    expect(resumo([], config)).toEqual({ faturamento: 0, caixas: 0, quebraDinheiro: 0, foraDaTolerancia: 0, divergenciaCartoes: 0, comDivergenciaCartoes: 0, aguardandoConferencia: 0, pendentes: 0 });
+    expect(resumo([], config)).toEqual({ faturamento: 0, caixas: 0, dinheiro: { falta: 0, sobra: 0 }, foraDaTolerancia: 0, cartoes: { falta: 0, sobra: 0 }, comDivergenciaCartoes: 0, aguardandoConferencia: 0, pendentes: 0 });
   });
 });
 
@@ -76,9 +82,9 @@ describe('faturamento', () => {
 });
 
 describe('quebras', () => {
-  it('quebra por unidade começa pela maior falta', () => {
-    const linhas = quebraPorUnidade([caixa({ diferenca_dinheiro: 4 }), caixa({ unidade_id: 2, diferenca_dinheiro: -30 })], [terra, doce]);
-    expect(linhas.map((linha) => [linha.nome, linha.valor])).toEqual([['DOCELATTO', -30], ['TERRA E MAR', 4]]);
+  it('quebra por unidade separa falta e sobra e começa pela maior quebra total', () => {
+    const linhas = quebraPorUnidade([caixa({ diferenca_dinheiro: 4 }), caixa({ unidade_id: 2, diferenca_dinheiro: -30 }), caixa({ unidade_id: 2, diferenca_dinheiro: 30 })], [terra, doce]);
+    expect(linhas.map((linha) => [linha.nome, linha.falta, linha.sobra])).toEqual([['DOCELATTO', -30, 30], ['TERRA E MAR', 0, 4]]);
   });
   it('cascata da gaveta vai das entradas em dinheiro ao apurado, sem somar o troco', () => {
     const etapas = cascataGaveta([

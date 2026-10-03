@@ -20,6 +20,8 @@ try { db.exec("ALTER TABLE fechamentos ADD COLUMN turno TEXT NOT NULL DEFAULT 'A
 try { db.exec('ALTER TABLE usuarios ADD COLUMN cargo TEXT'); } catch { /* coluna já existe */ }
 // ligado quando o dinheiro contado no fechamento fica na gaveta como troco do caixa seguinte da unidade
 try { db.exec('ALTER TABLE unidades ADD COLUMN troco_continua INTEGER NOT NULL DEFAULT 0'); } catch { /* coluna já existe */ }
+// valor de troco_continua da unidade quando o caixa foi finalizado; null nos caixas anteriores a esta coluna (o relatório usa o da unidade)
+try { db.exec('ALTER TABLE fechamentos ADD COLUMN troco_continua INTEGER'); } catch { /* coluna já existe */ }
 // na criação da tabela, cada usuário é vinculado às unidades onde já registrou caixa; depois disso só o dono altera os vínculos
 const vinculosNovos = !db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usuario_unidades'").get();
 db.transaction(() => {

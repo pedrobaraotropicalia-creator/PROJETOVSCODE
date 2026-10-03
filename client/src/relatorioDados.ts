@@ -15,6 +15,8 @@ const centavos = (valor: number) => Math.round(valor * 100) / 100;
 // caixa reaberto continua no faturamento (dia da primeira finalização), mas a diferença dele ainda é parcial
 const fechados = (caixas: CaixaRelatorio[]) => caixas.filter((caixa) => caixa.status !== 'aberto');
 const daUnidade = (caixas: CaixaRelatorio[], unidadeId: number) => caixas.filter((caixa) => caixa.unidade_id === unidadeId);
+// faltas e sobras somadas em separado: uma não compensa a outra entre caixas diferentes
+const faltaESobra = (valores: number[]) => ({ falta: centavos(soma(valores, (valor) => Math.max(-valor, 0))), sobra: centavos(soma(valores, (valor) => Math.max(valor, 0))) });
 const dinheiro = (caixa: CaixaRelatorio) => caixa.entradas.dinheiro ?? 0;
 
 const comoData = (dia: string) => new Date(`${dia}T12:00:00Z`);
@@ -36,9 +38,9 @@ export function resumo(caixas: CaixaRelatorio[], config: Configuracoes) {
   return {
     faturamento: centavos(soma(caixas, (caixa) => caixa.total_entradas)),
     caixas: caixas.length,
-    quebraDinheiro: centavos(soma(finalizados, (caixa) => caixa.diferenca_dinheiro)),
+    dinheiro: faltaESobra(finalizados.map((caixa) => caixa.diferenca_dinheiro)),
     foraDaTolerancia: finalizados.filter((caixa) => quebraDinheiro(caixa, config)).length,
-    divergenciaCartoes: centavos(soma(finalizados, (caixa) => caixa.diferenca_cartoes)),
+    cartoes: faltaESobra(finalizados.map((caixa) => caixa.diferenca_cartoes)),
     comDivergenciaCartoes: finalizados.filter(divergeCartoes).length,
     aguardandoConferencia: caixas.filter((caixa) => caixa.status === 'finalizado').length,
     pendentes: caixas.filter((caixa) => caixa.status === 'finalizado' && bateu(caixa, config) === false).length
@@ -54,10 +56,10 @@ export const porUnidade = (caixas: CaixaRelatorio[], anteriores: CaixaRelatorio[
   unidades.map((unidade) => ({ unidade_id: unidade.id, nome: unidade.nome, total: centavos(soma(daUnidade(caixas, unidade.id), (caixa) => caixa.total_entradas)), anterior: centavos(soma(daUnidade(anteriores, unidade.id), (caixa) => caixa.total_entradas)) }))
     .sort((a, b) => b.total - a.total);
 
-/** Quebra de dinheiro líquida por unidade, da maior falta para a maior sobra. */
+/** Faltas e sobras de dinheiro por unidade (falta negativa, para o gráfico divergente), da maior quebra total para a menor. */
 export const quebraPorUnidade = (caixas: CaixaRelatorio[], unidades: UnidadeRelatorio[]) =>
-  unidades.map((unidade) => ({ unidade_id: unidade.id, nome: unidade.nome, valor: centavos(soma(fechados(daUnidade(caixas, unidade.id)), (caixa) => caixa.diferenca_dinheiro)) }))
-    .sort((a, b) => a.valor - b.valor);
+  unidades.map((unidade) => { const { falta, sobra } = faltaESobra(fechados(daUnidade(caixas, unidade.id)).map((caixa) => caixa.diferenca_dinheiro)); return { unidade_id: unidade.id, nome: unidade.nome, falta: falta ? -falta : 0, sobra }; })
+    .sort((a, b) => (b.sobra - b.falta) - (a.sobra - a.falta));
 
 export const porTurno = (caixas: CaixaRelatorio[], unidades: UnidadeRelatorio[]) =>
   unidades.map((unidade) => { const daqui = daUnidade(caixas, unidade.id); return { nome: unidade.nome, almoco: centavos(soma(daqui.filter((caixa) => caixa.turno === 'ALMOÇO'), (caixa) => caixa.total_entradas)), jantar: centavos(soma(daqui.filter((caixa) => caixa.turno === 'JANTAR'), (caixa) => caixa.total_entradas)) }; });

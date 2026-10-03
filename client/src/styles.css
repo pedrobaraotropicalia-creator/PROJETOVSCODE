@@ -112,4 +112,6 @@ h1,h2,.unit-item strong,.detail-list span{overflow-wrap:anywhere}
 .somente-leitura{border:0;margin:16px 0 0;padding:0;min-width:0}.somente-leitura input:disabled,.somente-leitura select:disabled{opacity:1;color:#18324a;-webkit-text-fill-color:#18324a;background:#f4f8f7;cursor:default}
 .somente-leitura .form-grid+.cash-count-box{margin-top:18px}
 @media(max-width:800px){.detail-abas{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}.detail-abas button{flex:0 0 auto}.somente-leitura .cash-count-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+/* contagem só leitura em 2 colunas no celular: as regras de .modal .cash-count-grid (acima) posicionam as moedas para 3 colunas */
+@media(max-width:800px){.somente-leitura .cash-count-grid label:nth-child(n+9){transform:none}.somente-leitura .cash-count-grid label:nth-child(9){margin-top:14px!important;padding-top:12px!important}.somente-leitura .cash-count-grid label:nth-child(10){margin-top:0!important;padding-top:0!important}.somente-leitura .cash-count-grid label:nth-child(11),.somente-leitura .cash-count-grid label:nth-child(12){grid-column:auto}.somente-leitura .cash-count-grid label:nth-child(8)::before{width:calc(200% + 12px)}}
 

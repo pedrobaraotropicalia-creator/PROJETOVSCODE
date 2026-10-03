@@ -160,9 +160,11 @@ export function EtapaSomenteLeitura({ etapa, data }: { etapa: number; data: Deta
     </>,
     () => <>
       <h3>Entradas no sistema</h3>
-      <p className="muted">Valores do relatório do sistema por forma de pagamento.</p>
-      <div className="money-grid">{Object.entries(formasPagamento).map(([forma, label]) => <label key={forma}>{label}<MoneyInput value={data.entradas.find((item) => item.forma_pagamento === forma)?.valor ?? 0} onChange={nada} /></label>)}</div>
-      <div className="step-actions"><strong>Total: {money(close.total_entradas)}</strong></div>
+      {data.entradas.length ? <>
+        <p className="muted">Valores do relatório do sistema por forma de pagamento.</p>
+        <div className="money-grid">{Object.entries(formasPagamento).map(([forma, label]) => <label key={forma}>{label}<MoneyInput value={data.entradas.find((item) => item.forma_pagamento === forma)?.valor ?? 0} onChange={nada} /></label>)}</div>
+        <div className="step-actions"><strong>Total: {money(close.total_entradas)}</strong></div>
+      </> : <p className="muted">As entradas do sistema ainda não foram informadas.</p>}
     </>,
     () => <>
       <h3>Relatórios das maquininhas</h3>
@@ -174,7 +176,9 @@ export function EtapaSomenteLeitura({ etapa, data }: { etapa: number; data: Deta
       {data.saidas.length ? data.saidas.map((exit) => <div className="exit-row" key={exit.id}><MoneyInput value={exit.valor} onChange={nada} /><input value={exit.motivo} readOnly /></div>) : <p className="muted">Nenhuma saída registrada.</p>}
       <div className="step-actions"><strong>Total: {money(close.total_saidas)}</strong></div>
     </>,
-    () => <CountGrid variant="fechamento" kicker="ETAPA 5" title="Dinheiro no fechamento" description="Dinheiro físico contado ao final do turno." counts={contagemGravada(data, 'fechamento')} onChange={nada} />
+    () => data.contagens.some((item) => item.etapa === 'fechamento')
+      ? <CountGrid variant="fechamento" kicker="ETAPA 5" title="Dinheiro no fechamento" description="Dinheiro físico contado ao final do turno." counts={contagemGravada(data, 'fechamento')} onChange={nada} />
+      : <><h3>Contagem final</h3><p className="muted">A contagem final ainda não foi feita.</p></>
   ][etapa];
   return <fieldset className="somente-leitura" disabled>{conteudo()}</fieldset>;
 }

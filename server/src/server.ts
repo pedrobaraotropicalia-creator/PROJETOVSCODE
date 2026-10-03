@@ -48,9 +48,9 @@ const entradasSchema = z.object({ entradas: z.partialRecord(z.enum(formasPagamen
 const maquininhasSchema = z.object({ maquininhas: z.array(z.object({ maquininha_id: z.number().int().positive(), valor: valorSchema })) });
 const saidasSchema = z.object({ saidas: z.array(z.object({ valor: z.number({ error: 'Informe o valor da saída.' }).positive('A saída deve ter valor maior que zero.').max(limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`).transform(centavos), motivo: texto('Informe o motivo da saída.', 'O motivo da saída', limites.motivoSaida) })).max(limites.saidasPorCaixa, `No máximo ${limites.saidasPorCaixa} saídas por caixa.`) });
 const contagemFinalSchema = z.object({ contagens: contagensSchema });
-const unidadeSchema = z.object({ nome: nomeUnidadeSchema.optional(), troco_continua: z.boolean().optional() });
-const dia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida.');
-const relatorioSchema = z.object({ de: dia, ate: dia, unidades: z.string().optional().transform((value) => (value || '').split(',').map(Number).filter(Boolean)) });
+const unidadeSchema = z.object({ nome: nomeUnidadeSchema.optional(), troco_continua: z.boolean({ error: 'Informe se o troco passa para o próximo caixa.' }).optional() });
+const dia = z.string({ error: 'Informe o período do relatório.' }).regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida.').refine((texto) => { const data = new Date(`${texto}T12:00:00Z`); return !Number.isNaN(data.getTime()) && data.toISOString().slice(0, 10) === texto; }, 'Data inválida.');
+const relatorioSchema = z.object({ de: dia, ate: dia, unidades: z.string({ error: 'Unidades inválidas.' }).regex(/^[1-9]\d*(,[1-9]\d*)*$/, 'Unidades inválidas.').optional().transform((value) => value ? [...new Set(value.split(',').map(Number))] : []) }).refine((filtro) => filtro.de <= filtro.ate, 'A data inicial é depois da final.');
 // o dono acessa todas as unidades; funcionários e admins só as vinculadas a eles
 const unidadesVinculadas = (userId: number) => (db.prepare('SELECT unidade_id FROM usuario_unidades WHERE usuario_id=?').all(userId) as { unidade_id: number }[]).map((row) => row.unidade_id);
 const acessaUnidade = (user: User, unidadeId: number) => user.tipo === 'dono' || unidadesVinculadas(user.id).includes(Number(unidadeId));
@@ -108,9 +108,9 @@ app.get('/api/relatorios/caixas', auth, allow('dono'), (req, res) => {
   const { de, ate, unidades } = relatorioSchema.parse(req.query);
   const filtroUnidades = unidades.length ? ` AND unidade_id IN (${unidades.map(() => '?').join(',')})` : '';
   const linhas = db.prepare(`WITH base AS (
-    SELECT f.id, f.unidade_id, u.nome unidade_nome, u.troco_continua, f.usuario_id, usr.nome usuario_nome, f.turno, f.status, f.problema_resolvido, date(f.finalizado_em, '-3 hours') dia, f.criado_em,
+    SELECT f.id, f.unidade_id, u.nome unidade_nome, COALESCE(f.troco_continua, u.troco_continua) troco_continua, f.usuario_id, usr.nome usuario_nome, f.turno, f.status, f.problema_resolvido, date(f.finalizado_em, '-3 hours') dia, f.criado_em,
       f.saldo_inicial, f.dinheiro_fisico, f.total_entradas, f.total_maquininhas, f.total_saidas, f.diferenca_dinheiro, f.diferenca_cartoes,
-      LAG(f.dinheiro_fisico) OVER (PARTITION BY f.unidade_id ORDER BY f.criado_em, f.id) dinheiro_anterior
+      (SELECT a.dinheiro_fisico FROM fechamentos a WHERE a.unidade_id=f.unidade_id AND a.finalizado_em IS NOT NULL AND a.status<>'aberto' AND (a.criado_em < f.criado_em OR (a.criado_em = f.criado_em AND a.id < f.id)) ORDER BY a.criado_em DESC, a.id DESC LIMIT 1) dinheiro_anterior
     FROM fechamentos f JOIN unidades u ON u.id=f.unidade_id JOIN usuarios usr ON usr.id=f.usuario_id
     WHERE f.finalizado_em IS NOT NULL AND u.ativo=1)
   SELECT b.*,
@@ -189,7 +189,7 @@ app.put('/api/fechamentos/:id/contagem-final', auth, (req: RequestWithUser, res)
 // mantém a data da primeira finalização para o caixa reaberto não mudar de dia no faturamento
 app.post('/api/fechamentos/:id/finalizar', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
-  db.prepare("UPDATE fechamentos SET status='finalizado', atualizado_em=CURRENT_TIMESTAMP, finalizado_em=COALESCE(finalizado_em, CURRENT_TIMESTAMP) WHERE id=?").run(fechamento.id);
+  db.prepare("UPDATE fechamentos SET status='finalizado', atualizado_em=CURRENT_TIMESTAMP, finalizado_em=COALESCE(finalizado_em, CURRENT_TIMESTAMP), troco_continua=COALESCE(troco_continua, (SELECT troco_continua FROM unidades WHERE id=fechamentos.unidade_id)) WHERE id=?").run(fechamento.id);
   res.json({ mensagem: 'CAIXA FINALIZADO' });
 });
 app.post('/api/fechamentos/:id/conferir', auth, allow('dono'), (req, res) => { const fechamento = db.prepare('SELECT status FROM fechamentos WHERE id=?').get(req.params.id) as { status: string } | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (fechamento.status === 'aberto') return res.status(409).json({ erro: 'Finalize o caixa antes de conferir.' }); const resolved = req.body?.problema_resolvido === true ? 1 : req.body?.problema_resolvido === false ? 0 : null; const unmark = req.body?.desmarcar === true; db.prepare("UPDATE fechamentos SET status=?, problema_resolvido=?, conferido_por=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(unmark ? 'finalizado' : 'conferido', unmark ? null : resolved, unmark ? null : (req as RequestWithUser).user!.id, req.params.id); res.json({ mensagem: unmark ? 'Conferência desmarcada.' : 'Caixa conferido com sucesso.' }); });
