@@ -1,6 +1,6 @@
 import { Icone } from './icones';
 
-export const POR_PAGINA = 20;
+export const POR_PAGINA = 50;
 
 /** Página válida para o total atual: a lista pode encolher (filtro, exclusão) com o usuário numa página que deixou de existir. */
 export const paginaValida = (pagina: number, total: number) => Math.min(Math.max(pagina, 1), Math.max(Math.ceil(total / POR_PAGINA), 1));
