@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cascataGaveta, diasDoPeriodo, mixPagamento, passagemDeTurno, periodoAnterior, porDia, porDiaDaSemana, porUnidade, quebraPorUnidade, resultadoConferencia, resumo, saidasPorUnidade, situacaoPorDia, taxaDeAcertoSemanal, variacao, type CaixaRelatorio } from './relatorioDados';
 
-const config = { tolerancia_dinheiro: 5, fechamento_cego: true, ve_diferenca: true };
+const config = { tolerancia_dinheiro: 5, fechamento_cego: true, ve_diferenca: true, escolhe_data_caixa: true };
 const terra = { id: 1, nome: 'TERRA E MAR' };
 const doce = { id: 2, nome: 'DOCELATTO' };
 

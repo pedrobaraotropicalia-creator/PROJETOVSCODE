@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import DataInput from './DataInput';
+import { diaBrasilia, formatDay, parseDate } from './datas';
 import { money, request } from './api';
 import { MoneyInput, QuantityInput } from './inputs';
 import MaquininhaForm from './MaquininhaForm';
@@ -12,10 +14,10 @@ type Unit = { id: number; nome: string };
 type Machine = { id: number; nome: string; numero: string; numero_serie: string };
 type Contagem = { etapa: 'abertura' | 'fechamento'; denominacao: number; quantidade: number };
 type Detalhe = {
-  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
+  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; data_caixa: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
   entradas: { forma_pagamento: string; valor: number }[];
   maquininhas: { maquininha_id: number; valor: number }[];
-  saidas: { valor: number; motivo: string }[];
+  saidas: { valor: number; motivo: string; motivo_id: number | null; observacao: string | null }[];
   contagens: Contagem[];
 };
 type Counts = Record<number, number | undefined>;
@@ -38,7 +40,9 @@ function CountGrid({ variant, kicker, title, description, counts, onChange }: { 
   </div>;
 }
 
-function AberturaStep({ data, units, onSubmit }: { data: Detalhe | null; units: Unit[]; onSubmit: (body: object) => void }) {
+function AberturaStep({ data, units, escolheData, onSubmit }: { data: Detalhe | null; units: Unit[]; escolheData: boolean; onSubmit: (body: object) => void }) {
+  const [dataCaixa, setDataCaixa] = useState(formatDay(data?.fechamento.data_caixa ?? diaBrasilia(new Date())));
+  const [erroData, setErroData] = useState('');
   const [unit, setUnit] = useState(data ? String(data.fechamento.unidade_id) : '');
   const [turno, setTurno] = useState(data?.fechamento.turno || 'ALMOÇO');
   const [counts, setCounts] = useState(countsFrom(data, 'abertura'));
@@ -46,14 +50,19 @@ function AberturaStep({ data, units, onSubmit }: { data: Detalhe | null; units: 
   const changesUnit = data && unit !== String(data.fechamento.unidade_id) && data.maquininhas.length > 0;
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const dia = parseDate(dataCaixa);
+    if (escolheData && !dia) { setErroData('Informe a data do caixa no formato DD/MM/AAAA.'); return; }
+    setErroData('');
     if (changesUnit && !await confirmar({ titulo: 'Trocar a unidade do caixa', mensagem: <>Os valores de {data.maquininhas.length === 1 ? '1 maquininha' : `${data.maquininhas.length} maquininhas`} de <strong>{data.fechamento.unidade_nome}</strong> salvos neste caixa serão descartados, porque cada maquininha pertence a uma unidade. A etapa Maquininhas terá que ser preenchida de novo para <strong>{units.find((item) => String(item.id) === unit)?.nome}</strong>.</>, confirmar: 'Trocar unidade', perigo: true })) return;
-    onSubmit({ unidade_id: Number(unit), turno, contagens: countsPayload(counts) });
+    onSubmit({ ...(escolheData ? { data_caixa: dia } : {}), unidade_id: Number(unit), turno, contagens: countsPayload(counts) });
   }
   return <form onSubmit={submit}>
-    <div className="form-grid">
-      <label>Unidade<select value={unit} onChange={(event) => setUnit(event.target.value)} required><option value="">Selecione</option>{units.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>
+    <div className="form-grid abertura-campos">
+      {escolheData && <label>Data do caixa<DataInput label="Data do caixa" value={dataCaixa} onChange={setDataCaixa} /></label>}
       <label>Turno<select value={turno} onChange={(event) => setTurno(event.target.value)}><option value="ALMOÇO">ALMOÇO</option><option value="JANTAR">JANTAR</option></select></label>
+      <label>Unidade<select value={unit} onChange={(event) => setUnit(event.target.value)} required><option value="">Selecione</option>{units.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>
     </div>
+    {erroData && <div className="alert">{erroData}</div>}
     {!units.length && <div className="alert">Você ainda não está vinculado a nenhuma unidade. Peça ao dono para vincular você antes de abrir um caixa.</div>}
     {changesUnit && <div className="machine-note">Ao trocar a unidade, os relatórios de maquininhas já salvos neste caixa serão descartados.</div>}
     <CountGrid variant="abertura" kicker="ETAPA 1" title="Dinheiro na abertura" description="Conte o dinheiro disponível antes de iniciar o caixa." counts={counts} onChange={setCounts} />
@@ -91,15 +100,36 @@ function MaquininhasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: o
   </form>{showForm && <MaquininhaForm unidadeId={unit} onSaved={onMachineSaved} onClose={() => setShowForm(false)} />}</>;
 }
 
+type Motivo = { id: number; nome: string };
+const NOVO_MOTIVO = 'novo';
+
 function SaidasStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body: object) => void }) {
-  const [exits, setExits] = useState<{ valor: number | undefined; motivo: string }[]>(data.saidas.length ? data.saidas : [{ valor: undefined, motivo: '' }]);
-  const update = (index: number, change: Partial<(typeof exits)[number]>) => setExits(exits.map((item, itemIndex) => itemIndex === index ? { ...item, ...change } : item));
-  const filled = exits.filter((item) => (item.valor ?? 0) > 0 || item.motivo.trim());
-  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ saidas: filled.map((item) => ({ valor: item.valor ?? 0, motivo: item.motivo })) }); }}>
+  const { pedirTexto } = useDialogos();
+  const [motivos, setMotivos] = useState<Motivo[]>([]);
+  const [erro, setErro] = useState('');
+  // saída anterior à lista de motivos: o texto digitado vira observação e o motivo precisa ser escolhido
+  const [exits, setExits] = useState<{ valor: number | undefined; motivo_id: string; observacao: string }[]>(data.saidas.length ? data.saidas.map((item) => ({ valor: item.valor, motivo_id: item.motivo_id ? String(item.motivo_id) : '', observacao: item.observacao ?? (item.motivo_id ? '' : item.motivo) })) : [{ valor: undefined, motivo_id: '', observacao: '' }]);
+  useEffect(() => { request('/motivos-saida').then(setMotivos).catch((err) => setErro(err.message)); }, []);
+  // motivo já excluído que este caixa usa continua escolhível
+  const opcoes = [...motivos, ...data.saidas.filter((item) => item.motivo_id && !motivos.some((motivo) => motivo.id === item.motivo_id)).map((item) => ({ id: item.motivo_id!, nome: item.motivo }))];
+  const update = (index: number, change: Partial<(typeof exits)[number]>) => setExits((atuais) => atuais.map((item, itemIndex) => itemIndex === index ? { ...item, ...change } : item));
+  async function escolherMotivo(index: number, valor: string) {
+    if (valor !== NOVO_MOTIVO) return update(index, { motivo_id: valor });
+    const nome = await pedirTexto({ titulo: 'Novo motivo de saída', mensagem: 'O motivo fica disponível para todos os caixas da rede.', rotulo: 'Nome do motivo', maxLength: limites.nomeMotivo, confirmar: 'Cadastrar motivo' });
+    if (!nome) return;
+    try { const motivo: Motivo = await request('/motivos-saida', { method: 'POST', body: JSON.stringify({ nome }) }); setMotivos((atuais) => atuais.some((item) => item.id === motivo.id) ? atuais : [...atuais, motivo].sort((a, b) => a.nome.localeCompare(b.nome))); update(index, { motivo_id: String(motivo.id) }); } catch (err) { toast.error((err as Error).message); }
+  }
+  const filled = exits.filter((item) => (item.valor ?? 0) > 0 || item.motivo_id || item.observacao.trim());
+  return <form onSubmit={(event) => { event.preventDefault(); onSubmit({ saidas: filled.map((item) => ({ valor: item.valor ?? 0, motivo_id: Number(item.motivo_id) || undefined, observacao: item.observacao })) }); }}>
     <h3>Saídas de dinheiro</h3>
     <p className="muted">Retiradas do caixa durante o turno. Deixe em branco se não houve saídas.</p>
-    {exits.map((exit, index) => <div className="exit-row" key={index}><MoneyInput value={exit.valor} onChange={(valor) => update(index, { valor })} placeholder="Valor" /><input placeholder="Motivo" maxLength={limites.motivoSaida} value={exit.motivo} onChange={(event) => update(index, { motivo: event.target.value })} /></div>)}
-    <button type="button" className="ghost" disabled={exits.length >= limites.saidasPorCaixa} onClick={() => setExits([...exits, { valor: undefined, motivo: '' }])}><Icone nome="adicionar" /> Adicionar saída</button>
+    {erro && <div className="alert">{erro}</div>}
+    {exits.map((exit, index) => <div className="exit-row saida-motivo" key={index}>
+      <MoneyInput value={exit.valor} onChange={(valor) => update(index, { valor })} placeholder="Valor" />
+      <select aria-label="Motivo" value={exit.motivo_id} onChange={(event) => escolherMotivo(index, event.target.value)}><option value="">Motivo</option>{opcoes.map((motivo) => <option key={motivo.id} value={motivo.id}>{motivo.nome}</option>)}<option value={NOVO_MOTIVO}>+ Novo motivo…</option></select>
+      <input placeholder="Observação (opcional)" aria-label="Observação" maxLength={limites.motivoSaida} value={exit.observacao} onChange={(event) => update(index, { observacao: event.target.value })} />
+    </div>)}
+    <button type="button" className="ghost" disabled={exits.length >= limites.saidasPorCaixa} onClick={() => setExits([...exits, { valor: undefined, motivo_id: '', observacao: '' }])}><Icone nome="adicionar" /> Adicionar saída</button>
     <div className="step-actions"><strong>Total: {money(filled.reduce((sum, item) => sum + (item.valor ?? 0), 0))}</strong><button className="primary" type="submit">Salvar e continuar</button></div>
   </form>;
 }
@@ -144,7 +174,7 @@ function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Conf
   </div>;
 }
 
-type DetalheConsulta = Omit<Detalhe, 'maquininhas' | 'saidas'> & { maquininhas: { id: number; nome: string; numero: string; numero_serie: string; valor: number }[]; saidas: { id: number; valor: number; motivo: string }[] };
+type DetalheConsulta = Omit<Detalhe, 'maquininhas' | 'saidas'> & { maquininhas: { id: number; nome: string; numero: string; numero_serie: string; valor: number }[]; saidas: { id: number; valor: number; motivo: string; observacao: string | null }[] };
 export const etapasConsulta = etapas.slice(0, 5);
 const nada = () => {};
 // na consulta, cédula não contada aparece como 0, não como campo a preencher
@@ -173,7 +203,7 @@ export function EtapaSomenteLeitura({ etapa, data }: { etapa: number; data: Deta
     </>,
     () => <>
       <h3>Saídas de dinheiro</h3>
-      {data.saidas.length ? data.saidas.map((exit) => <div className="exit-row" key={exit.id}><MoneyInput value={exit.valor} onChange={nada} /><input value={exit.motivo} readOnly /></div>) : <p className="muted">Nenhuma saída registrada.</p>}
+      {data.saidas.length ? data.saidas.map((exit) => <div className="exit-row saida-motivo" key={exit.id}><MoneyInput value={exit.valor} onChange={nada} /><input value={exit.motivo} readOnly aria-label="Motivo" /><input value={exit.observacao ?? ''} readOnly aria-label="Observação" /></div>) : <p className="muted">Nenhuma saída registrada.</p>}
       <div className="step-actions"><strong>Total: {money(close.total_saidas)}</strong></div>
     </>,
     () => data.contagens.some((item) => item.etapa === 'fechamento')
@@ -208,7 +238,7 @@ export default function CaixaEditor({ id, units, config, onExit, onFinalized }: 
     <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setError(''); }}>{index + 1}. {etapa}{done[index] && <Icone nome="check" />}</button>)}</div>
     {error && <div className="alert">{error}</div>}
     {!ready && <p className="muted">Carregando caixa...</p>}
-    {ready && step === 0 && <AberturaStep key={caixaId ?? 'novo'} data={data} units={units} onSubmit={caixaId ? saveStep('abertura') : openCaixa} />}
+    {ready && step === 0 && <AberturaStep key={caixaId ?? 'novo'} data={data} units={units} escolheData={config.escolhe_data_caixa} onSubmit={caixaId ? saveStep('abertura') : openCaixa} />}
     {data && step === 1 && <EntradasStep data={data} onSubmit={saveStep('entradas')} />}
     {data && step === 2 && <MaquininhasStep data={data} onSubmit={saveStep('maquininhas')} />}
     {data && step === 3 && <SaidasStep data={data} onSubmit={saveStep('saidas')} />}

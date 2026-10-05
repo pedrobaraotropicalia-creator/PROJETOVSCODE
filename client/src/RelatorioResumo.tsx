@@ -8,7 +8,7 @@ import type { DadosRelatorio } from './Relatorios';
 const textoVariacao = (valor: number | null) => valor === null ? 'Sem caixas no período anterior' : `${valor >= 0 ? '+' : '−'}${percentual(Math.abs(valor))} sobre o período anterior`;
 const plural = (quantidade: number, singular: string, varios: string) => `${quantidade} ${quantidade === 1 ? singular : varios}`;
 
-export default function RelatorioResumo({ caixas, anteriores, unidades, todasUnidades, de, ate, config }: DadosRelatorio) {
+export default function RelatorioResumo({ caixas, anteriores, anterior, unidades, todasUnidades, de, ate, config }: DadosRelatorio) {
   const atual = resumo(caixas, config);
   const passado = resumo(anteriores, config);
   const mudanca = variacao(atual.faturamento, passado.faturamento);
@@ -46,7 +46,7 @@ export default function RelatorioResumo({ caixas, anteriores, unidades, todasUni
           </LineChart>
         </ResponsiveContainer>
       </Grafico>
-      <Grafico titulo="Faturamento por unidade" descricao="Período atual comparado ao período anterior de mesmo tamanho">
+      <Grafico titulo="Faturamento por unidade" descricao={`Período atual comparado a ${formatDay(anterior.de)} a ${formatDay(anterior.ate)}`}>
         <ResponsiveContainer width="100%" height={Math.max(160, unidades.length * 64)}>
           <BarChart data={porUnidade(caixas, anteriores, unidades)} layout="vertical" margin={{ top: 0, right: 72, bottom: 0, left: 0 }} barGap={2}>
             <XAxis type="number" hide />

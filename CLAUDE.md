@@ -17,7 +17,7 @@ npm run build        # tsc do server -> server/dist; vite build -> dist/client
 npm start            # node server/dist/server.js (serve API e o SPA compilado)
 ```
 
-Testes: `npm test` (vitest), só para as agregações do relatório (`client/src/relatorioDados.test.ts`). Não há linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos. Para checar o client:
+Testes: `npm test` (vitest). `client/src/relatorioDados.test.ts` cobre as agregações do relatório; `server/src/api.test.ts` sobe o server de verdade (porta 0, banco `:memory:`, dono de teste) e testa pela API o cofre, o dia do caixa e a reativação de unidades. O `server.ts` exporta `servidor` (o retorno de `app.listen`) para isso, e `server/tsconfig.json` exclui `*.test.ts` do build. Não há linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos. Para checar o client:
 
 ```bash
 cd client && npx tsc --noEmit --ignoreConfig --jsx react-jsx --strict --skipLibCheck --module esnext --moduleResolution bundler --target es2022 --types vite/client src/*.tsx src/api.ts
@@ -50,8 +50,8 @@ A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nom
 
 - `server.ts` contém **todas** as rotas em um único arquivo, com handlers escritos em uma linha cada. Não há camada de serviço/repositório: SQL direto via `better-sqlite3` (síncrono) dentro dos handlers.
 - `db.ts` abre o banco e aplica o schema com `CREATE TABLE IF NOT EXISTS` a cada boot. Migrações são `ALTER TABLE ... ADD COLUMN` dentro de `try/catch` que ignora "coluna já existe". Também garante as unidades oficiais e desativa unidades legadas `UNIDADE N`. Caminho do banco: `DATABASE_FILE`, senão `/tmp/data/caixa.db` no Cloud Run (`K_SERVICE` definido), senão `./data/caixa.db`.
-- Exclusões de unidades, maquininhas e usuários são lógicas (`ativo=0`); fechamentos são excluídos de fato (com `ON DELETE CASCADE` nos filhos).
-- Datas são gravadas em UTC (`CURRENT_TIMESTAMP`). O relatório agrupa por dia com `date(finalizado_em, '-3 hours')`, e o client formata em `America/Sao_Paulo`.
+- Exclusões de unidades, maquininhas e usuários são lógicas (`ativo=0`); fechamentos são excluídos de fato (com `ON DELETE CASCADE` nos filhos). Unidades excluídas são reativadas pelo dono (`GET /unidades/excluidas`, `POST /unidades/:id/reativar`; as legadas `UNIDADE N` ficam de fora, porque o boot as desativa de novo), e criar uma unidade com o nome de uma excluída dá 409 pedindo a reativação.
+- Datas são gravadas em UTC (`CURRENT_TIMESTAMP`). O **dia do caixa** é a coluna `fechamentos.data_caixa` (`AAAA-MM-DD`, Brasília), escolhida na abertura; relatórios, filtros de Caixas fechados, ordem da lista, PDF e cofre usam ela. Os caixas anteriores à coluna receberam `date(criado_em, '-3 hours')`. O client formata os timestamps em `America/Sao_Paulo`.
 - Em produção o mesmo processo serve o SPA de `dist/client` (resolvido relativo a `__dirname`) com fallback para `index.html` em qualquer rota fora de `/api`.
 
 ### Autorização
@@ -65,14 +65,14 @@ A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nom
 
 ### Fechamento de caixa
 
-O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
+O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes.:
 
 | Etapa | Rota | Grava |
 |---|---|---|
 | Abertura | `POST /fechamentos` (cria), `PUT /fechamentos/:id/abertura` | unidade, turno, contagem → `saldo_inicial` |
 | Entradas | `PUT /fechamentos/:id/entradas` | formas de pagamento fixas → `total_entradas` |
 | Maquininhas | `PUT /fechamentos/:id/maquininhas` | só maquininhas ativas da unidade → `total_maquininhas` |
-| Saídas | `PUT /fechamentos/:id/saidas` | `total_saidas` (opcional) |
+| Saídas | `PUT /fechamentos/:id/saidas` | valor, `motivo_id` (da lista `motivos_saida`) e observação opcional → `total_saidas` (etapa opcional) |
 | Contagem final | `PUT /fechamentos/:id/contagem-final` | contagem → `dinheiro_fisico` |
 | Finalizar | `POST /fechamentos/:id/finalizar` | `status='finalizado'` |
 
@@ -86,7 +86,22 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 - **Fechamento cego** (ligado por padrão): para quem não confere (funcionário e admin com cargo Caixa), `ocultarDiferencas` remove `diferenca*` das respostas da API e `GET /configuracoes` devolve `ve_diferenca: false`. O client trata campo ausente como "oculto"; nunca recalcule a diferença no client a partir dos totais.
 - `carregarEditavel` bloqueia a edição de caixa que não esteja `aberto` (409). Para editar, é preciso `/reabrir`.
 - Status: `aberto` → `finalizado` → `conferido` (só o dono, via `/conferir`, que recusa caixa aberto). `/reabrir` volta para `aberto`.
-- `finalizado_em` guarda a **primeira** finalização (`COALESCE`), então reabrir e finalizar de novo não muda o dia do caixa no faturamento. Caixas nunca finalizados ficam fora do faturamento.
+- `finalizado_em` guarda a **primeira** finalização (`COALESCE`). Caixas nunca finalizados ficam fora do faturamento.
+- Na abertura (`POST /fechamentos`, `PUT .../abertura`), `data_caixa` só pode ser diferente de hoje para dono e admin sem cargo Caixa (`escolheDataCaixa`, também devolvido em `GET /configuracoes` como `escolhe_data_caixa` para o client mostrar o campo); nunca futura. Os demais abrem com hoje (403 se mandarem outra data).
+
+### Motivos de saída
+
+- Lista única da rede em `motivos_saida` (nome único sem diferenciar maiúsculas; lista inicial criada junto com a tabela). Cada saída da gaveta guarda `motivo_id` e uma `observacao` opcional; renomear o motivo corrige também os caixas antigos, porque a consulta lê o nome por JOIN.
+- Saídas anteriores à lista têm `motivo_id` null e o texto livre em `saidas.motivo` (nas novas fica `''`); `GET /fechamentos/:id` devolve `motivo` = nome da lista ou esse texto. Ao reabrir um caixa assim, a etapa Saídas leva o texto antigo para a observação e pede o motivo.
+- Qualquer usuário lista e cadastra (`POST /motivos-saida`, direto na etapa Saídas pelo "+ Novo motivo…"; nome já existente devolve o mesmo motivo, reativando se estava excluído). Renomear e excluir (lógico) são só admin e dono, na tela Motivos de saída (`Motivos.tsx`, menu GESTÃO). Uma saída pode manter um motivo já excluído.
+
+### Cofre
+
+- Um cofre por unidade, só o dono acessa (menu Cofre, `Cofre.tsx`, rotas `/cofre*`). Saldo em R$ do dinheiro em espécie, sem cédulas; pode ficar negativo (a tela avisa).
+- O cofre representa todo o dinheiro da unidade: cada caixa finalizado manda ao cofre o `dinheiro_fisico` ("Envio do caixa") e tira dele o `saldo_inicial` ("Retirada para troco"). Essas linhas **não são gravadas**: a view `cofre_extrato` (`db.ts`) as deriva dos fechamentos com `movimenta_cofre=1 AND status<>'aberto'`, datadas pelo `data_caixa`. Por isso reabrir, editar ou excluir o caixa já reflete no cofre, sem sincronização.
+- `movimenta_cofre` é gravado só na **primeira** finalização (`CASE WHEN finalizado_em IS NULL`): caixas finalizados antes do cofre existir ficam null para sempre e nunca movimentam o cofre, mesmo reabertos. O saldo de partida é um "Ajuste de conferência" lançado pelo dono.
+- Lançamentos manuais ficam em `cofre_movimentacoes` (valor com sinal; tipos fixos com o sinal em `sinalCofre`, `server.ts`; ajuste e outros exigem sentido e observação). Data escolhida, nunca futura; `criado_em` guarda quando foi lançado. Transferência grava as duas pontas com `transferencia_id` = id da origem. Não há edição: exclusão lógica (`ativo=0`, `excluido_por`, `excluido_em`), que numa transferência marca as duas pontas.
+- `GET /cofre`: por unidade ativa, `total` (soma do extrato) e `fundo_gaveta` (saldo inicial dos caixas abertos que movimentarão o cofre); a tela mostra "No cofre" = total − fundo. O extrato abre no mês corrente (`mesAtual`, `datas.ts`, o mesmo padrão de Caixas fechados e Relatórios). `GET /cofre/movimentacoes` devolve o extrato filtrado e os totais de entradas/saídas por tipo (sem as excluídas).
 
 ### Client (`client/src/`)
 
@@ -97,16 +112,16 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes:
 - **Largura**: no desktop o conteúdo ocupa toda a largura ao lado do trilho do menu (`.content` sem `max-width`, coluna `minmax(0,1fr)` para conteúdo largo rolar dentro do próprio painel, como o calendário e os mapas de calor do relatório). Não ponha teto de largura em painel; limite só campos que não fazem sentido largos (ex.: valor em Configurações, 320px).
 - **Ícones**: só Boxicons, pelo componente `<Icone nome="..." />` de `icones.tsx` (paths copiados de boxicons.com, sem dependência). Para ícone novo, acrescente o path em `caminhos`. Não use caracteres Unicode como ícone.
 - **Toasts**: resultado de ação (salvo, excluído, cadastrado) e erro de ação em linha usam `toast.success`/`toast.error` do `sonner` (`<Toaster>` único em `main.tsx`, canto inferior direito). Erro de formulário continua no próprio formulário (`.alert`). Não crie mensagem de sucesso dentro do painel.
-- **Linhas clicáveis em cadastros**: em Maquininhas, Unidades e Usuários (só o dono) clicar na linha abre a edição (`.clickable-row`), e o botão "Editar" continua para quem usa teclado; ações na linha (lixeira, interruptor) fazem `stopPropagation`. Unidades abrem `UnidadeModal` (nome e troco), que envia só o que mudou; o interruptor de troco na própria linha continua como atalho.
+- **Linhas clicáveis em cadastros**: em Maquininhas, Unidades e Usuários (só o dono) clicar na linha abre a edição (`.clickable-row`), e o botão "Editar" continua para quem usa teclado; ações na linha (lixeira, interruptor) fazem `stopPropagation`. Unidades abrem `UnidadeModal` (nome e troco), que envia só o que mudou; o interruptor de troco na própria linha continua como atalho. O nome da unidade também se renomeia inline (`NomeEditavel.tsx`: clique no nome, Enter ou sair do campo salva, Esc cancela; ele para a propagação, então não abre o modal). A tela Motivos de saída usa o mesmo componente.
 - **Texto livre em tabela/lista** (nome, e-mail, unidade): envolva em `.texto-livre`, que quebra em qualquer ponto e limita a largura, para um valor longo não alargar a tabela nem espremer as outras colunas.
 - Menu lateral, padrão único (estado `menuAberto` em `App.tsx`, classe `.menu-aberto`): no desktop é sempre um trilho de 72px só com ícones, que abre por cima do conteúdo ao passar o mouse (120ms de atraso), receber foco pelo teclado (`:focus-visible`; clique e volta para a janela não abrem) ou ser tocado (o primeiro toque só abre), sem mover nada de lugar (só ganha largura e rótulos). No celular é a mesma gaveta, fora da tela até tocar no ☰ (`.menu-mobile`, no header). Fecha ao sair com o mouse, escolher um item, tocar fora (`.menu-fundo`) ou com Esc. Não há botão de fixar nem preferência salva. Cada botão do menu precisa de `title` (dica no trilho) e do formato `<Icone /><span>rótulo</span>`, porque o CSS esconde o `span` no trilho.
-- **Relatórios** (menu, só dono): `Relatorios.tsx` tem os filtros (atalhos Hoje/7 dias/30 dias/Mês, período só com data, unidades; abre em 30 dias e recarrega sozinho) e as abas Resumo, Faturamento, Quebras e Dinheiro (`Relatorio*.tsx`, gráficos com `recharts`).
+- **Relatórios** (menu, só dono): `Relatorios.tsx` tem os filtros (atalhos Hoje/7 dias/30 dias/Mês, período só com data, unidades; abre no atalho Mês, que vai do dia 1 ao último dia do mês corrente, e recarrega sozinho). O comparativo usa `periodoAnterior` (mesmo tamanho, logo antes), exceto no atalho Mês, que compara com `trechoDoMesAnterior` (dia 1 do mês anterior até o mesmo dia de hoje), porque o mês corrente ainda está em andamento e as abas Resumo, Faturamento, Quebras e Dinheiro (`Relatorio*.tsx`, gráficos com `recharts`).
   - Dados: `GET /relatorios/caixas?de&ate&unidades` (exclusivo do dono) devolve uma linha por caixa já finalizado alguma vez, com entradas por forma, valores por maquininha e `dinheiro_anterior` (contado no caixa anterior da unidade). O client chama duas vezes, para o período e para o anterior de mesmo tamanho (`periodoAnterior`).
   - Toda agregação fica em `relatorioDados.ts` (funções puras, com testes). Faturamento = `total_entradas`. Quebra, divergência e "bateu" ignoram caixas reabertos (`status='aberto'`) e usam `quebra.ts`. Na cascata da gaveta, o saldo inicial não é somado: é o mesmo troco recontado a cada caixa.
   - Visual em `graficos.tsx`: cor fixa por unidade pela posição na lista completa (o filtro não repinta), legenda com texto em cor de texto, eixo de nomes mais estreito no celular (`useEixoDeNomes`). Mapa de calor e calendário são tabelas em CSS.
   - `troco_continua` (por unidade, editado na tela Unidades pelo dono): ligado quando o dinheiro contado no fechamento fica na gaveta para o caixa seguinte. Só nessas unidades a aba Dinheiro compara saldo inicial × contado no caixa anterior.
 - Inputs de dinheiro usam `MoneyInput` (`inputs.tsx`) e as quantidades de cédulas usam `QuantityInput` (`react-number-format`, formato `R$ 4.500,40`, sem negativos). Use esses componentes em qualquer campo novo de valor.
-- Caixas fechados tem as abas "Caixas" (lista) e "Por colaborador" (`ResumoColaboradores.tsx`: quebra por colaborador calculada no client sobre os caixas já filtrados; clicar num colaborador volta à lista filtrada por ele). As abas só aparecem para admin/dono que veem diferença. Filtros ficam em `passaNoFiltro` (`App.tsx`), comuns às duas abas: período (dia da finalização, ou da abertura se em aberto; vazio = todos), unidades, turno e responsável; situação e status valem só na lista, porque no resumo distorceriam a proporção de caixas que não bateram. Situação (bateu/não bateu/falta/sobra, ignorando caixas em aberto, cuja diferença é parcial), status e turno. O botão Excluir é do próprio `CloseTable` (`onDeleted`), por id; não volte a associar ações a linhas por índice.
+- Caixas fechados tem as abas "Caixas" (lista) e "Por colaborador" (`ResumoColaboradores.tsx`: quebra por colaborador calculada no client sobre os caixas já filtrados; clicar num colaborador volta à lista filtrada por ele). As abas só aparecem para admin/dono que veem diferença. Filtros ficam em `passaNoFiltro` (`App.tsx`), comuns às duas abas: período (dia do caixa; abre no mês corrente, do dia 1 ao último, e "Limpar filtros" volta para ele; vazio = todos), unidades, turno e responsável; situação e status valem só na lista, porque no resumo distorceriam a proporção de caixas que não bateram. Situação (bateu/não bateu/falta/sobra, ignorando caixas em aberto, cuja diferença é parcial), status e turno. O botão Excluir é do próprio `CloseTable` (`onDeleted`), por id; não volte a associar ações a linhas por índice. A lista é paginada no client (`Paginacao.tsx`, 20 por página, volta à página 1 quando o filtro muda); o resumo e a aba Por colaborador usam todos os filtrados. O extrato do Cofre usa o mesmo componente.
 - **Confirmações e avisos**: não use `window.confirm`/`alert`/`prompt`. Use `useDialogos()` (`dialogos.tsx`: `confirmar`, `avisar`, `pedirTexto`, todos retornam Promise), com `perigo: true` em ação destrutiva (botão vermelho e foco inicial em Cancelar). O `DialogosProvider` envolve o `Dashboard` em `App`. A mensagem deve dizer o que exatamente será afetado (nome, unidade, data).
 - Exclusão é sempre o botão de lixeira (`row-action row-action-danger` com `<Icone nome="lixeira" />`, `title` e `aria-label` dizendo o que exclui), seguido do modal `confirmar` com `perigo: true`.
 - Tabela de caixas (`CloseTable`): colunas de largura fixa (`.close-table`), coluna Ações com PDF para todos e lixeira só para o dono.

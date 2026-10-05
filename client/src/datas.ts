@@ -40,3 +40,17 @@ export function parseDateTime(text: string) {
   const date = new Date(`${year}-${month}-${day}T${hour}:${minute}:00${BRASILIA_OFFSET}`);
   return !Number.isNaN(date.getTime()) && formatDateTime(date) === text ? date : null;
 }
+
+const doisDigitos = (numero: number) => String(numero).padStart(2, '0');
+const ultimoDiaDoMes = (ano: number, mes: number) => new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+/** Primeiro e último dia do mês de um dia 'AAAA-MM-DD' */
+export const mesDoDia = (dia: string) => { const [ano, mes] = dia.split('-').map(Number); return { de: `${dia.slice(0, 8)}01`, ate: `${dia.slice(0, 8)}${doisDigitos(ultimoDiaDoMes(ano, mes))}` }; };
+/** Mês corrente em Brasília: o período que as telas com filtro de data abrem */
+export const mesAtual = () => mesDoDia(diaBrasilia(new Date()));
+/** Do dia 1 do mês anterior até o mesmo dia do mês (limitado ao fim dele): o trecho comparável a um mês ainda em andamento */
+export const trechoDoMesAnterior = (dia: string) => {
+  const [ano, mes, diaDoMes] = dia.split('-').map(Number);
+  const [anoAnterior, mesAnterior] = mes === 1 ? [ano - 1, 12] : [ano, mes - 1];
+  const prefixo = `${anoAnterior}-${doisDigitos(mesAnterior)}-`;
+  return { de: `${prefixo}01`, ate: `${prefixo}${doisDigitos(Math.min(diaDoMes, ultimoDiaDoMes(anoAnterior, mesAnterior)))}` };
+};

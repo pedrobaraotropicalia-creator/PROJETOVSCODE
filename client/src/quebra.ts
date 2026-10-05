@@ -1,6 +1,6 @@
 import { money } from './api';
 
-export type Configuracoes = { tolerancia_dinheiro: number; fechamento_cego: boolean; ve_diferenca: boolean };
+export type Configuracoes = { tolerancia_dinheiro: number; fechamento_cego: boolean; ve_diferenca: boolean; escolhe_data_caixa: boolean };
 /** Campos de diferença vêm ausentes da API quando o usuário não pode vê-los (fechamento cego). */
 export type Diferencas = { status: string; diferenca_dinheiro?: number; diferenca_cartoes?: number };
 

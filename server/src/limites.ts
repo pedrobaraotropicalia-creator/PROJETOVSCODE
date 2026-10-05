@@ -9,6 +9,8 @@ export const limites = {
   numeroMaquininha: 20,
   serieMaquininha: 40,
   motivoSaida: 200,
+  nomeMotivo: 60,
+  observacaoCofre: 200,
   saidasPorCaixa: 50,
   valor: 1_000_000,
   tolerancia: 1_000,

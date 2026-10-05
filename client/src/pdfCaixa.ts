@@ -1,16 +1,16 @@
 import { jsPDF } from 'jspdf';
 import autoTable, { type RowInput } from 'jspdf-autotable';
 import { money } from './api';
-import { formatDate, formatDateTime } from './datas';
+import { formatDateTime, formatDay } from './datas';
 import { descreverQuebra, formasPagamento, statusCaixa, type Configuracoes } from './quebra';
 
 type Contagem = { etapa: 'abertura' | 'fechamento'; denominacao: number; quantidade: number; total: number };
 export type DetalheCaixa = {
   /** Campos de diferença vêm ausentes da API no fechamento cego. */
-  fechamento: { id: number; unidade_nome: string; usuario_nome: string; turno: string; status: string; problema_resolvido: number | null; conferido_por_nome: string | null; criado_em: string; finalizado_em: string | null; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
+  fechamento: { id: number; unidade_nome: string; usuario_nome: string; turno: string; status: string; problema_resolvido: number | null; conferido_por_nome: string | null; criado_em: string; data_caixa: string; finalizado_em: string | null; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
   entradas: { forma_pagamento: string; valor: number }[];
   maquininhas: { nome: string; numero: string; numero_serie: string; valor: number }[];
-  saidas: { motivo: string; valor: number }[];
+  saidas: { motivo: string; observacao: string | null; valor: number }[];
   contagens: Contagem[];
 };
 
@@ -57,6 +57,7 @@ export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emit
   };
 
   const identificacao: RowInput[] = [
+    ['Dia do caixa', formatDay(caixa.data_caixa)],
     ['Operador', caixa.usuario_nome],
     ['Aberto em', formatDateTime(caixa.criado_em)],
     ['Finalizado em', caixa.finalizado_em ? formatDateTime(caixa.finalizado_em) : 'Não finalizado'],
@@ -93,7 +94,7 @@ export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emit
 
   tabela('Relatórios das maquininhas', ['Maquininha', 'Número', 'Série', 'Valor'], data.maquininhas.map((item) => [item.nome, item.numero, item.numero_serie, valor(item.valor)]), ['Total', '', '', valor(soma(data.maquininhas))]);
 
-  tabela('Saídas de dinheiro', ['Motivo', 'Valor'], data.saidas.map((item) => [item.motivo, valor(item.valor)]), ['Total', valor(soma(data.saidas))]);
+  tabela('Saídas de dinheiro', ['Motivo', 'Valor'], data.saidas.map((item) => [item.observacao ? `${item.motivo} · ${item.observacao}` : item.motivo, valor(item.valor)]), ['Total', valor(soma(data.saidas))]);
 
   const final = contagem('fechamento');
   tabela('Contagem final', ['Cédula ou moeda', 'Quantidade', 'Total'], final.body, ['Total', '', final.total]);
@@ -107,6 +108,6 @@ export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emit
     doc.text(`Página ${pagina} de ${paginas}`, larguraPagina - MARGEM, alturaPagina - 8, { align: 'right' });
   }
 
-  const dia = formatDate(caixa.finalizado_em || caixa.criado_em).replace(/\//g, '-');
+  const dia = formatDay(caixa.data_caixa).replace(/\//g, '-');
   doc.save(`caixa-${caixa.id}-${caixa.unidade_nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${dia}.pdf`);
 }
