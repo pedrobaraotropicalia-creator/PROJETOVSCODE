@@ -17,9 +17,6 @@ export const formatDate = (value: string | number | Date) => dataFormat.format(a
 export const formatDateTime = (value: string | number | Date) => dataHoraFormat.format(asUtcDate(value)).replace(',', '');
 /** 'AAAA-MM-DD' (dia já calculado no fuso de Brasília) → DD/MM/AAAA */
 export const formatDay = (day: string) => day.split('-').reverse().join('/');
-const diaSemanaFormat = new Intl.DateTimeFormat('pt-BR', { timeZone: BRASILIA_TZ, weekday: 'long' });
-/** Dia da semana com inicial maiúscula, ex.: 'Sexta-feira' */
-export const formatWeekday = (value: Date) => { const dia = diaSemanaFormat.format(value); return dia.charAt(0).toUpperCase() + dia.slice(1); };
 
 /** Dia no fuso de Brasília como 'AAAA-MM-DD' (ordena e compara como texto) */
 export const diaBrasilia = (value: string | number | Date) => formatDate(value).split('/').reverse().join('-');
