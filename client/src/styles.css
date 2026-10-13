@@ -151,3 +151,7 @@ aside nav .nav-label{display:block;height:1px;margin:10px 14px;background:#fffff
 .unidade-regras{display:flex;flex-direction:column;gap:2px;color:#70838d;font-size:12px;line-height:1.35}.unidade-tolerancia input{max-width:320px}
 /* enquanto confere o token salvo no refresh: fundo do app e a mensagem só depois de 0,4s, para a resposta rápida não piscar */
 .conferindo-sessao{min-height:100vh;display:grid;place-items:center;background:#f5f7f8;color:#70838d;font-size:14px}.conferindo-sessao span{opacity:0;animation:aparecer-carregando .2s ease-out .4s forwards}@keyframes aparecer-carregando{to{opacity:1}}
+/* números de destaque em DM Sans com dígitos tabulares: o "1" da Space Grotesk (estreito e sem base, ou com base no tabular) parece cortado,
+   principalmente em "11"; os títulos continuam na Space Grotesk. Elemento novo que mostra número entra aqui, com o mesmo seletor da regra
+   que define a fonte (o shorthand font: dela venceria uma regra menos específica) */
+.stats strong,.metric-line strong,.reconcile strong,.detail-grid strong,.detail-resultado strong,.step-actions strong,.cash-count-total,.medias-caixa strong,.cofre-saldos strong,.filter-summary strong,.side-date-full strong,aside .side-date-short{font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums}
