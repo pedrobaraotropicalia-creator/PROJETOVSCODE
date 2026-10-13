@@ -8,9 +8,9 @@ import type { DadosRelatorio } from './Relatorios';
 const textoVariacao = (valor: number | null) => valor === null ? 'Sem caixas no período anterior' : `${valor >= 0 ? '+' : '−'}${percentual(Math.abs(valor))} sobre o período anterior`;
 const plural = (quantidade: number, singular: string, varios: string) => `${quantidade} ${quantidade === 1 ? singular : varios}`;
 
-export default function RelatorioResumo({ caixas, anteriores, anterior, unidades, todasUnidades, de, ate, config }: DadosRelatorio) {
-  const atual = resumo(caixas, config);
-  const passado = resumo(anteriores, config);
+export default function RelatorioResumo({ caixas, anteriores, anterior, unidades, todasUnidades, de, ate }: DadosRelatorio) {
+  const atual = resumo(caixas);
+  const passado = resumo(anteriores);
   const mudanca = variacao(atual.faturamento, passado.faturamento);
   const dias = diasDoPeriodo(de, ate);
   const linhasDia = porDia(caixas, unidades, dias);

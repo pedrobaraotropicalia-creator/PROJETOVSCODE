@@ -3,7 +3,6 @@ import { request } from './api';
 import { diaBrasilia, formatDay, mesAtual, parseDate, trechoDoMesAnterior } from './datas';
 import DataInput from './DataInput';
 import UnitMultiSelect from './UnitMultiSelect';
-import type { Configuracoes } from './quebra';
 import { periodoAnterior, somarDias, type CaixaRelatorio, type UnidadeRelatorio } from './relatorioDados';
 import RelatorioResumo from './RelatorioResumo';
 import RelatorioFaturamento from './RelatorioFaturamento';
@@ -22,9 +21,9 @@ const periodoDoAtalho = (atalho: Exclude<Atalho, 'personalizado'>) => {
 };
 const consulta = (de: string, ate: string, unidades: number[]) => `/relatorios/caixas?${new URLSearchParams({ de, ate, ...(unidades.length ? { unidades: unidades.join(',') } : {}) })}`;
 
-export type DadosRelatorio = { caixas: CaixaRelatorio[]; anteriores: CaixaRelatorio[]; anterior: { de: string; ate: string }; unidades: UnidadeRelatorio[]; todasUnidades: UnidadeRelatorio[]; de: string; ate: string; config: Configuracoes };
+export type DadosRelatorio = { caixas: CaixaRelatorio[]; anteriores: CaixaRelatorio[]; anterior: { de: string; ate: string }; unidades: UnidadeRelatorio[]; todasUnidades: UnidadeRelatorio[]; de: string; ate: string };
 
-export default function Relatorios({ units, config, recarga }: { units: UnidadeRelatorio[]; config: Configuracoes; recarga: number }) {
+export default function Relatorios({ units, recarga }: { units: UnidadeRelatorio[]; recarga: number }) {
   const [atalho, setAtalho] = useState<Atalho>('mes');
   const [periodo, setPeriodo] = useState(() => periodoDoAtalho('mes'));
   const [textos, setTextos] = useState(() => ({ de: formatDay(periodo.de), ate: formatDay(periodo.ate) }));
@@ -60,7 +59,7 @@ export default function Relatorios({ units, config, recarga }: { units: UnidadeR
   const [de, ate] = [parseDate(textos.de), parseDate(textos.ate)];
   const aviso = de && ate && de > ate ? 'A data inicial é depois da final.' : '';
   const visiveis = selecionadas.length ? units.filter((unidade) => selecionadas.includes(unidade.id)) : units;
-  const props: DadosRelatorio | null = dados && { ...dados, anterior, unidades: visiveis, todasUnidades: units, de: periodo.de, ate: periodo.ate, config };
+  const props: DadosRelatorio | null = dados && { ...dados, anterior, unidades: visiveis, todasUnidades: units, de: periodo.de, ate: periodo.ate };
 
   return <section className="panel relatorios">
     <div className="relatorio-filtros">

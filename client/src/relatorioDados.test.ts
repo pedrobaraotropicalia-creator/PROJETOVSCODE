@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { cascataGaveta, diasDoPeriodo, mixPagamento, passagemDeTurno, periodoAnterior, porDia, porDiaDaSemana, porUnidade, quebraPorUnidade, resultadoConferencia, resumo, saidasPorUnidade, situacaoPorDia, taxaDeAcertoSemanal, variacao, type CaixaRelatorio } from './relatorioDados';
 
-const config = { tolerancia_dinheiro: 5, fechamento_cego: true, ve_diferenca: true, escolhe_data_caixa: true };
 const terra = { id: 1, nome: 'TERRA E MAR' };
 const doce = { id: 2, nome: 'DOCELATTO' };
 
 let proximoId = 1;
 const caixa = (dados: Partial<CaixaRelatorio>): CaixaRelatorio => ({
-  id: proximoId++, unidade_id: 1, unidade_nome: 'TERRA E MAR', troco_continua: false, usuario_id: 1, usuario_nome: 'Ana',
+  id: proximoId++, unidade_id: 1, unidade_nome: 'TERRA E MAR', troco_continua: false, tolerancia_dinheiro: 5, usuario_id: 1, usuario_nome: 'Ana',
   turno: 'ALMOÇO', status: 'finalizado', problema_resolvido: null, dia: '2026-09-07', criado_em: '2026-09-07 13:00:00',
   saldo_inicial: 200, dinheiro_fisico: 300, total_entradas: 1000, total_maquininhas: 900, total_saidas: 0,
   diferenca_dinheiro: 0, diferenca_cartoes: 0, dinheiro_anterior: null, entradas: { dinheiro: 100, pix: 900 }, maquininhas: [],
@@ -33,7 +32,7 @@ describe('resumo', () => {
       caixa({ diferenca_dinheiro: -10 }),
       caixa({ diferenca_dinheiro: 3 }),
       caixa({ status: 'aberto', diferenca_dinheiro: -500 })
-    ], config);
+    ]);
     expect(r.faturamento).toBe(3000);
     expect(r.dinheiro).toEqual({ falta: 10, sobra: 3 });
     expect(r.foraDaTolerancia).toBe(1);
@@ -43,19 +42,24 @@ describe('resumo', () => {
       caixa({ diferenca_cartoes: -0.5 }),
       caixa({ status: 'conferido', diferenca_dinheiro: -50 }),
       caixa({})
-    ], config);
+    ]);
     expect(r.comDivergenciaCartoes).toBe(1);
     expect(r.aguardandoConferencia).toBe(2);
     expect(r.pendentes).toBe(1);
   });
   it('falta de um caixa não é compensada pela sobra de outro', () => {
-    const r = resumo([caixa({ diferenca_dinheiro: -100, diferenca_cartoes: 50 }), caixa({ diferenca_dinheiro: 100, diferenca_cartoes: -50 })], config);
+    const r = resumo([caixa({ diferenca_dinheiro: -100, diferenca_cartoes: 50 }), caixa({ diferenca_dinheiro: 100, diferenca_cartoes: -50 })]);
     expect(r.dinheiro).toEqual({ falta: 100, sobra: 100 });
     expect(r.cartoes).toEqual({ falta: 50, sobra: 50 });
     expect(r.foraDaTolerancia).toBe(2);
   });
+  it('usa a tolerância da unidade de cada caixa', () => {
+    const r = resumo([caixa({ diferenca_dinheiro: -3 }), caixa({ unidade_id: 2, tolerancia_dinheiro: 0, diferenca_dinheiro: -3 })]);
+    expect(r.foraDaTolerancia).toBe(1);
+    expect(r.pendentes).toBe(1);
+  });
   it('período vazio dá tudo zero', () => {
-    expect(resumo([], config)).toEqual({ faturamento: 0, caixas: 0, dinheiro: { falta: 0, sobra: 0 }, foraDaTolerancia: 0, cartoes: { falta: 0, sobra: 0 }, comDivergenciaCartoes: 0, aguardandoConferencia: 0, pendentes: 0 });
+    expect(resumo([])).toEqual({ faturamento: 0, caixas: 0, dinheiro: { falta: 0, sobra: 0 }, foraDaTolerancia: 0, cartoes: { falta: 0, sobra: 0 }, comDivergenciaCartoes: 0, aguardandoConferencia: 0, pendentes: 0 });
   });
 });
 
@@ -103,14 +107,14 @@ describe('quebras', () => {
     const [linha] = situacaoPorDia([
       caixa({ dia: '2026-09-07' }), caixa({ dia: '2026-09-07', diferenca_dinheiro: -20 }),
       caixa({ dia: '2026-09-09', status: 'aberto' })
-    ], [terra], ['2026-09-07', '2026-09-08', '2026-09-09'], config);
+    ], [terra], ['2026-09-07', '2026-09-08', '2026-09-09']);
     expect(linha.dias.map((dia) => dia.situacao)).toEqual(['nao-bateu', 'sem-caixa', 'em-aberto']);
     expect(linha.dias[0].aguardando).toBe(true);
   });
   it('taxa de acerto semanal respeita a tolerância e ignora caixa reaberto', () => {
     const [semana] = taxaDeAcertoSemanal([
       caixa({ diferenca_dinheiro: -4 }), caixa({ diferenca_dinheiro: -6 }), caixa({ status: 'aberto', diferenca_dinheiro: -100 })
-    ], [terra, doce], config);
+    ], [terra, doce]);
     expect(semana).toEqual({ semana: '2026-09-07', 1: 0.5, 2: null });
   });
   it('resultado da conferência separa certo, errado, só conferido e aguardando', () => {

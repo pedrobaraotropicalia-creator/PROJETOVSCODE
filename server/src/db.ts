@@ -57,8 +57,6 @@ db.transaction(() => {
 })();
 try { db.exec('ALTER TABLE saidas ADD COLUMN motivo_id INTEGER REFERENCES motivos_saida(id)'); } catch { /* coluna já existe */ }
 try { db.exec('ALTER TABLE saidas ADD COLUMN observacao TEXT'); } catch { /* coluna já existe */ }
-db.exec('CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)');
-db.prepare("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('tolerancia_dinheiro', '0'), ('fechamento_cego', '1')").run();
 
 // a diferença total se divide em quebra de dinheiro (gaveta) e divergência de cartões/Pix (maquininhas × entradas que não são dinheiro)
 const entradaDinheiro = "COALESCE((SELECT valor FROM entradas e WHERE e.fechamento_id=fechamentos.id AND e.forma_pagamento='dinheiro'), 0)";
@@ -82,3 +80,15 @@ const garantirUnidades = db.transaction(() => {
   db.prepare("UPDATE unidades SET ativo = 0 WHERE nome GLOB 'UNIDADE [0-9]*'").run();
 });
 garantirUnidades();
+
+// tolerância de quebra de dinheiro e fechamento cego são de cada unidade. Na criação das colunas, todas herdam o que valia
+// para a rede na antiga tela Configurações (tabela configuracoes, que deixa de existir)
+const colunasUnidade = (db.prepare('PRAGMA table_info(unidades)').all() as { name: string }[]).map((coluna) => coluna.name);
+if (!colunasUnidade.includes('fechamento_cego')) db.transaction(() => {
+  db.exec('ALTER TABLE unidades ADD COLUMN tolerancia_dinheiro REAL NOT NULL DEFAULT 0');
+  db.exec('ALTER TABLE unidades ADD COLUMN fechamento_cego INTEGER NOT NULL DEFAULT 1');
+  if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='configuracoes'").get()) return;
+  const antigas = Object.fromEntries((db.prepare('SELECT chave, valor FROM configuracoes').all() as { chave: string; valor: string }[]).map((linha) => [linha.chave, linha.valor]));
+  db.prepare('UPDATE unidades SET tolerancia_dinheiro=?, fechamento_cego=?').run(Number(antigas.tolerancia_dinheiro) || 0, antigas.fechamento_cego === '0' ? 0 : 1);
+  db.exec('DROP TABLE configuracoes');
+})();

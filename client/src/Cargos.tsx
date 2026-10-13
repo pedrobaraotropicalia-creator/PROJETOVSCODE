@@ -17,7 +17,7 @@ const perfis = [
 const permissoes: { acao: string; funcionario: Permissao; admin: Permissao; dono: Permissao }[] = [
   { acao: 'Abrir e preencher caixas', funcionario: 'Nas unidades vinculadas', admin: 'Nas unidades vinculadas', dono: 'Em todas as unidades' },
   { acao: 'Consultar e editar caixas', funcionario: 'Só os próprios', admin: 'De todos, nas unidades vinculadas', dono: 'Todos' },
-  { acao: 'Ver a diferença no fechamento cego', funcionario: false, admin: true, dono: true },
+  { acao: 'Ver a diferença nas unidades com fechamento cego', funcionario: false, admin: true, dono: true },
   { acao: 'Abrir caixa com outra data', funcionario: 'Só a data de hoje', admin: true, dono: true },
   { acao: 'Cadastrar maquininhas e motivos de saída', funcionario: true, admin: true, dono: true },
   { acao: 'Editar e excluir maquininhas e motivos de saída', funcionario: false, admin: true, dono: true },
@@ -25,7 +25,7 @@ const permissoes: { acao: string; funcionario: Permissao; admin: Permissao; dono
   { acao: 'Cadastrar, editar e inativar usuários', funcionario: false, admin: false, dono: true },
   { acao: 'Conferir e excluir caixas', funcionario: false, admin: false, dono: true },
   { acao: 'Cofre e relatórios', funcionario: false, admin: false, dono: true },
-  { acao: 'Unidades e configurações', funcionario: false, admin: false, dono: true }
+  { acao: 'Unidades e regras de fechamento (tolerância e fechamento cego)', funcionario: false, admin: false, dono: true }
 ];
 
 const celula = (permissao: Permissao) => permissao === true ? <span className="permissao-sim" role="img" aria-label="Sim"><Icone nome="check" /></span> : permissao === false ? <span className="permissao-nao" role="img" aria-label="Não">—</span> : permissao;

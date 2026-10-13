@@ -2,12 +2,12 @@ import { jsPDF } from 'jspdf';
 import autoTable, { type RowInput } from 'jspdf-autotable';
 import { money } from './api';
 import { formatDateTime, formatDay } from './datas';
-import { descreverQuebra, formasPagamento, statusCaixa, type Configuracoes } from './quebra';
+import { descreverQuebra, formasPagamento, statusCaixa } from './quebra';
 
 type Contagem = { etapa: 'abertura' | 'fechamento'; denominacao: number; quantidade: number; total: number };
 export type DetalheCaixa = {
   /** Campos de diferença vêm ausentes da API no fechamento cego. */
-  fechamento: { id: number; unidade_nome: string; usuario_nome: string; turno: string; status: string; problema_resolvido: number | null; conferido_por_nome: string | null; criado_em: string; data_caixa: string; finalizado_em: string | null; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
+  fechamento: { id: number; unidade_nome: string; usuario_nome: string; turno: string; status: string; problema_resolvido: number | null; conferido_por_nome: string | null; criado_em: string; data_caixa: string; finalizado_em: string | null; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number; tolerancia_dinheiro: number };
   entradas: { forma_pagamento: string; valor: number }[];
   maquininhas: { nome: string; numero: string; numero_serie: string; valor: number }[];
   saidas: { motivo: string; observacao: string | null; valor: number }[];
@@ -24,7 +24,7 @@ const soma = (itens: { valor: number }[]) => itens.reduce((total, item) => total
 const ultimaTabela = (doc: jsPDF) => (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
 
 /** Gera e baixa o PDF com todos os registros de um caixa. */
-export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emitidoPor: string) {
+export function exportarPdfCaixa(data: DetalheCaixa, emitidoPor: string) {
   const caixa = data.fechamento;
   const doc = new jsPDF();
   const larguraPagina = doc.internal.pageSize.getWidth();
@@ -61,7 +61,7 @@ export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emit
     ['Operador', caixa.usuario_nome],
     ['Aberto em', formatDateTime(caixa.criado_em)],
     ['Finalizado em', caixa.finalizado_em ? formatDateTime(caixa.finalizado_em) : 'Não finalizado'],
-    ['Status', statusCaixa(caixa, config)]
+    ['Status', statusCaixa(caixa)]
   ];
   if (caixa.conferido_por_nome) identificacao.push(['Conferido por', caixa.conferido_por_nome]);
   autoTable(doc, { startY: y, body: identificacao, theme: 'plain', margin: { left: MARGEM, right: MARGEM }, styles: { fontSize: 10, cellPadding: 1.2 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } } });
@@ -77,7 +77,7 @@ export function exportarPdfCaixa(data: DetalheCaixa, config: Configuracoes, emit
   if (caixa.diferenca_dinheiro === undefined) resumo.push(['Diferença', 'Oculta (fechamento cego)']);
   else {
     resumo.push(['Quebra de dinheiro', valor(caixa.diferenca_dinheiro)], ['Divergência cartões/Pix', valor(caixa.diferenca_cartoes ?? 0)]);
-    if (caixa.status !== 'aberto') resumo.push(['Resultado', texto(descreverQuebra(caixa, config))]);
+    if (caixa.status !== 'aberto') resumo.push(['Resultado', texto(descreverQuebra(caixa))]);
   }
   tabela(caixa.status === 'aberto' ? 'Resumo (caixa em aberto: valores parciais)' : 'Resumo', ['Item', 'Valor'], resumo);
 

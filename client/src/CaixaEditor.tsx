@@ -7,14 +7,14 @@ import MaquininhaForm from './MaquininhaForm';
 import { toast } from 'sonner';
 import { useDialogos } from './dialogos';
 import { Icone } from './icones';
-import { corDiferenca, descreverQuebra, formasPagamento, type Configuracoes } from './quebra';
+import { corDiferenca, descreverQuebra, formasPagamento, type Acesso } from './quebra';
 import { limites } from '../../server/src/limites';
 
 type Unit = { id: number; nome: string };
 type Machine = { id: number; nome: string; numero: string; numero_serie: string };
 type Contagem = { etapa: 'abertura' | 'fechamento'; denominacao: number; quantidade: number };
 type Detalhe = {
-  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; data_caixa: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number };
+  fechamento: { id: number; unidade_id: number; unidade_nome: string; turno: string; data_caixa: string; saldo_inicial: number; total_entradas: number; total_maquininhas: number; total_saidas: number; dinheiro_fisico: number; diferenca_dinheiro?: number; diferenca_cartoes?: number; tolerancia_dinheiro: number };
   entradas: { forma_pagamento: string; valor: number }[];
   maquininhas: { maquininha_id: number; valor: number }[];
   saidas: { valor: number; motivo: string; motivo_id: number | null; observacao: string | null }[];
@@ -142,7 +142,7 @@ function ContagemFinalStep({ data, onSubmit }: { data: Detalhe; onSubmit: (body:
   </form>;
 }
 
-function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Configuracoes; onFinalize: () => void }) {
+function RevisaoStep({ data, onFinalize }: { data: Detalhe; onFinalize: () => void }) {
   const close = data.fechamento;
   const warnings = [
     !data.entradas.length && 'As entradas do sistema não foram informadas.',
@@ -167,7 +167,7 @@ function RevisaoStep({ data, config, onFinalize }: { data: Detalhe; config: Conf
       : <>
         <div className="reconcile"><span>Quebra de dinheiro</span><strong className={corDiferenca(close.diferenca_dinheiro)}>{money(close.diferenca_dinheiro)}</strong><small>Dinheiro contado − (saldo inicial + entradas em dinheiro − saídas)</small></div>
         <div className="reconcile"><span>Cartões e Pix</span><strong className={corDiferenca(close.diferenca_cartoes ?? 0)}>{money(close.diferenca_cartoes ?? 0)}</strong><small>Maquininhas − entradas em cartão, Pix e vales</small></div>
-        <p className="muted detail-verdict">{descreverQuebra({ status: 'finalizado', ...close }, config)}</p>
+        <p className="muted detail-verdict">{descreverQuebra({ status: 'finalizado', ...close })}</p>
       </>}
     {warnings.map((warning) => <div className="alert" key={warning}>{warning}</div>)}
     <div className="step-actions"><span /><button className="primary" type="button" onClick={finalizar}>Finalizar caixa</button></div>
@@ -213,7 +213,7 @@ export function EtapaSomenteLeitura({ etapa, data }: { etapa: number; data: Deta
   return <fieldset className="somente-leitura" disabled>{conteudo()}</fieldset>;
 }
 
-export default function CaixaEditor({ id, units, config, onExit, onFinalized }: { id: number | null; units: Unit[]; config: Configuracoes; onExit: () => void; onFinalized: () => void }) {
+export default function CaixaEditor({ id, units, acesso, onExit, onFinalized }: { id: number | null; units: Unit[]; acesso: Acesso; onExit: () => void; onFinalized: () => void }) {
   const [caixaId, setCaixaId] = useState(id);
   const [data, setData] = useState<Detalhe | null>(null);
   const [step, setStep] = useState(0);
@@ -238,11 +238,11 @@ export default function CaixaEditor({ id, units, config, onExit, onFinalized }: 
     <div className="caixa-steps">{etapas.map((etapa, index) => <button key={etapa} type="button" className={`${index === step ? 'active' : ''} ${done[index] ? 'done' : ''}`} disabled={!caixaId && index > 0} onClick={() => { setStep(index); setError(''); }}>{index + 1}. {etapa}{done[index] && <Icone nome="check" />}</button>)}</div>
     {error && <div className="alert">{error}</div>}
     {!ready && <p className="muted">Carregando caixa...</p>}
-    {ready && step === 0 && <AberturaStep key={caixaId ?? 'novo'} data={data} units={units} escolheData={config.escolhe_data_caixa} onSubmit={caixaId ? saveStep('abertura') : openCaixa} />}
+    {ready && step === 0 && <AberturaStep key={caixaId ?? 'novo'} data={data} units={units} escolheData={acesso.escolhe_data_caixa} onSubmit={caixaId ? saveStep('abertura') : openCaixa} />}
     {data && step === 1 && <EntradasStep data={data} onSubmit={saveStep('entradas')} />}
     {data && step === 2 && <MaquininhasStep data={data} onSubmit={saveStep('maquininhas')} />}
     {data && step === 3 && <SaidasStep data={data} onSubmit={saveStep('saidas')} />}
     {data && step === 4 && <ContagemFinalStep data={data} onSubmit={saveStep('contagem-final')} />}
-    {data && step === 5 && <RevisaoStep data={data} config={config} onFinalize={finalize} />}
+    {data && step === 5 && <RevisaoStep data={data} onFinalize={finalize} />}
   </section>;
 }

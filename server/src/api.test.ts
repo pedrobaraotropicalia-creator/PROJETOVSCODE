@@ -284,3 +284,51 @@ describe('inativação de usuários', () => {
     expect((await api('POST', `/usuarios/${usuario.id}/reativar`)).status).toBe(404);
   });
 });
+
+describe('regras de fechamento por unidade', () => {
+  it('cada unidade tem sua tolerância e seu fechamento cego, e o caixa traz a tolerância da unidade', async () => {
+    const [aberta, cega] = [(await api('POST', '/unidades', { nome: 'SEM CEGO' })).corpo.id, (await api('POST', '/unidades', { nome: 'COM CEGO' })).corpo.id];
+    expect((await api('POST', '/unidades', { nome: 'JA CONFIGURADA', troco_continua: true, tolerancia_dinheiro: 2.5, fechamento_cego: false })).corpo).toMatchObject({ troco_continua: 1, tolerancia_dinheiro: 2.5, fechamento_cego: 0 });
+    expect((await api('POST', '/unidades', { nome: 'TOLERANCIA NEGATIVA', tolerancia_dinheiro: -1 })).status).toBe(400);
+    expect((await api('POST', '/unidades', {})).corpo.erro).toBe('Nome da unidade é obrigatório.');
+    expect((await api('GET', '/unidades')).corpo.find((item: { id: number }) => item.id === cega)).toMatchObject({ tolerancia_dinheiro: 0, fechamento_cego: 1 });
+    expect((await api('PATCH', `/unidades/${aberta}`, { tolerancia_dinheiro: 5, fechamento_cego: false })).corpo).toMatchObject({ tolerancia_dinheiro: 5, fechamento_cego: 0 });
+    expect((await api('PATCH', `/unidades/${aberta}`, { tolerancia_dinheiro: -1 })).status).toBe(400);
+    expect((await api('PATCH', `/unidades/${aberta}`, { tolerancia_dinheiro: 1_000_000 })).status).toBe(400);
+
+    const { corpo } = await api('POST', '/auth/register', { nome: 'Operador', email: 'regras@cofre.test', senha, confirmacao: senha });
+    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { unidades: [cega] });
+    const tokenOperador = (await api('POST', '/auth/login', { email: 'regras@cofre.test', senha })).corpo.token;
+    expect((await api('GET', '/acesso', undefined, tokenOperador)).corpo).toEqual({ ve_diferenca: false, escolhe_data_caixa: false });
+    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { unidades: [aberta, cega] });
+    expect((await api('GET', '/acesso', undefined, tokenOperador)).corpo.ve_diferenca).toBe(true);
+
+    const abrir = async (unidade: number) => (await api('POST', '/fechamentos', { unidade_id: unidade, turno: 'ALMOÇO', contagens: notas(10) }, tokenOperador)).corpo.id as number;
+    const [caixaAberta, caixaCega] = [await abrir(aberta), await abrir(cega)];
+    const lista = (await api('GET', '/fechamentos', undefined, tokenOperador)).corpo as { id: number; diferenca_dinheiro?: number; tolerancia_dinheiro: number }[];
+    expect(lista.find((item) => item.id === caixaAberta)).toMatchObject({ diferenca_dinheiro: -10, tolerancia_dinheiro: 5 });
+    expect(lista.find((item) => item.id === caixaCega)).not.toHaveProperty('diferenca_dinheiro');
+    expect((await api('GET', `/fechamentos/${caixaCega}`, undefined, tokenOperador)).corpo.fechamento).not.toHaveProperty('diferenca_dinheiro');
+    expect((await api('GET', `/fechamentos/${caixaCega}`)).corpo.fechamento).toMatchObject({ diferenca_dinheiro: -10, tolerancia_dinheiro: 0 });
+  });
+});
+
+describe('nomes de unidade', () => {
+  it('não se repetem nem com maiúsculas diferentes, inclusive em letras acentuadas', async () => {
+    const cafe = (await api('POST', '/unidades', { nome: 'CAFÉ CENTRO' })).corpo.id;
+    expect((await api('POST', '/unidades', { nome: 'café centro' })).corpo).toEqual({ erro: 'Já existe a unidade CAFÉ CENTRO.' });
+    const outra = (await api('POST', '/unidades', { nome: 'CAFÉ NORTE' })).corpo.id;
+    expect((await api('PATCH', `/unidades/${outra}`, { nome: 'Café Centro' })).status).toBe(409);
+    expect((await api('PATCH', `/unidades/${cafe}`, { nome: 'Café Centro' })).corpo.nome).toBe('Café Centro');
+  });
+
+  it('o nome de uma excluída pede a reativação, e a reativação recusa nome de uma ativa', async () => {
+    const antiga = (await api('POST', '/unidades', { nome: 'LOJA VELHA' })).corpo.id;
+    await api('DELETE', `/unidades/${antiga}`);
+    expect((await api('POST', '/unidades', { nome: 'Loja Velha' })).corpo.erro).toMatch(/excluída LOJA VELHA/);
+    const nova = (await api('POST', '/unidades', { nome: 'LOJA NOVA' })).corpo.id;
+    expect((await api('PATCH', `/unidades/${nova}`, { nome: 'loja velha' })).status).toBe(409);
+    banco.prepare('UPDATE unidades SET nome=? WHERE id=?').run('Loja Velha', nova);
+    expect((await api('POST', `/unidades/${antiga}/reativar`)).corpo.erro).toMatch(/ativa Loja Velha/);
+  });
+});

@@ -1,17 +1,17 @@
 import { money } from './api';
-import { bateu, corDiferenca, divergeCartoes, type Configuracoes } from './quebra';
+import { bateu, corDiferenca, divergeCartoes } from './quebra';
 
-type Caixa = { usuario_id: number; usuario_nome: string; status: string; finalizado_em: string | null; diferenca_dinheiro?: number; diferenca_cartoes?: number };
+type Caixa = { usuario_id: number; usuario_nome: string; status: string; finalizado_em: string | null; diferenca_dinheiro?: number; diferenca_cartoes?: number; tolerancia_dinheiro: number };
 type Linha = { usuario_id: number; nome: string; caixas: number; naoBateram: number; falta: number; sobra: number; liquida: number; cartoes: number };
 
-function agrupar(caixas: Caixa[], config: Configuracoes) {
+function agrupar(caixas: Caixa[]) {
   const linhas = new Map<number, Linha>();
   // caixa em aberto tem diferença parcial e fica fora do resumo
   for (const caixa of caixas.filter((item) => item.status !== 'aberto' && item.finalizado_em)) {
     const linha = linhas.get(caixa.usuario_id) ?? { usuario_id: caixa.usuario_id, nome: caixa.usuario_nome, caixas: 0, naoBateram: 0, falta: 0, sobra: 0, liquida: 0, cartoes: 0 };
     const quebra = caixa.diferenca_dinheiro ?? 0;
     linha.caixas += 1;
-    if (bateu(caixa, config) === false) linha.naoBateram += 1;
+    if (bateu(caixa) === false) linha.naoBateram += 1;
     if (quebra < 0) linha.falta += quebra; else linha.sobra += quebra;
     linha.liquida += quebra;
     if (divergeCartoes(caixa)) linha.cartoes += 1;
@@ -21,8 +21,8 @@ function agrupar(caixas: Caixa[], config: Configuracoes) {
 }
 
 /** Quebra de caixa por colaborador sobre os caixas já filtrados em Caixas fechados. */
-export default function ResumoColaboradores({ caixas, config, onSelecionar }: { caixas: Caixa[]; config: Configuracoes; onSelecionar: (usuarioId: number) => void }) {
-  const linhas = agrupar(caixas, config);
+export default function ResumoColaboradores({ caixas, onSelecionar }: { caixas: Caixa[]; onSelecionar: (usuarioId: number) => void }) {
+  const linhas = agrupar(caixas);
   const total = linhas.reduce((soma, linha) => ({ ...soma, caixas: soma.caixas + linha.caixas, naoBateram: soma.naoBateram + linha.naoBateram, falta: soma.falta + linha.falta, sobra: soma.sobra + linha.sobra, liquida: soma.liquida + linha.liquida, cartoes: soma.cartoes + linha.cartoes }), { usuario_id: 0, nome: 'Total', caixas: 0, naoBateram: 0, falta: 0, sobra: 0, liquida: 0, cartoes: 0 });
   const celulas = (linha: Linha) => <>
     <td>{linha.caixas}</td>

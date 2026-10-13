@@ -1,14 +1,14 @@
-import { bateu, formasPagamento, quebraDinheiro, divergeCartoes, type Configuracoes } from './quebra';
+import { bateu, formasPagamento, quebraDinheiro, divergeCartoes } from './quebra';
 
-/** Linha de GET /relatorios/caixas: um caixa já finalizado alguma vez, com o dia da primeira finalização (Brasília). */
+/** Linha de GET /relatorios/caixas: um caixa já finalizado alguma vez, com o dia da primeira finalização (Brasília) e a tolerância da unidade. */
 export type CaixaRelatorio = {
-  id: number; unidade_id: number; unidade_nome: string; troco_continua: boolean; usuario_id: number; usuario_nome: string;
+  id: number; unidade_id: number; unidade_nome: string; troco_continua: boolean; tolerancia_dinheiro: number; usuario_id: number; usuario_nome: string;
   turno: string; status: string; problema_resolvido: number | null; dia: string; criado_em: string;
   saldo_inicial: number; dinheiro_fisico: number; total_entradas: number; total_maquininhas: number; total_saidas: number;
   diferenca_dinheiro: number; diferenca_cartoes: number; dinheiro_anterior: number | null;
   entradas: Record<string, number>; maquininhas: { id: number; nome: string; numero: string; valor: number }[];
 };
-export type UnidadeRelatorio = { id: number; nome: string };
+export type UnidadeRelatorio = { id: number; nome: string; tolerancia_dinheiro?: number };
 
 const soma = <T>(itens: T[], valor: (item: T) => number) => itens.reduce((total, item) => total + valor(item), 0);
 const centavos = (valor: number) => Math.round(valor * 100) / 100;
@@ -33,17 +33,17 @@ export const periodoAnterior = (de: string, ate: string) => { const tamanho = di
 /** Variação relativa; null quando não há base de comparação. */
 export const variacao = (atual: number, anterior: number) => anterior ? (atual - anterior) / anterior : null;
 
-export function resumo(caixas: CaixaRelatorio[], config: Configuracoes) {
+export function resumo(caixas: CaixaRelatorio[]) {
   const finalizados = fechados(caixas);
   return {
     faturamento: centavos(soma(caixas, (caixa) => caixa.total_entradas)),
     caixas: caixas.length,
     dinheiro: faltaESobra(finalizados.map((caixa) => caixa.diferenca_dinheiro)),
-    foraDaTolerancia: finalizados.filter((caixa) => quebraDinheiro(caixa, config)).length,
+    foraDaTolerancia: finalizados.filter((caixa) => quebraDinheiro(caixa)).length,
     cartoes: faltaESobra(finalizados.map((caixa) => caixa.diferenca_cartoes)),
     comDivergenciaCartoes: finalizados.filter(divergeCartoes).length,
     aguardandoConferencia: caixas.filter((caixa) => caixa.status === 'finalizado').length,
-    pendentes: caixas.filter((caixa) => caixa.status === 'finalizado' && bateu(caixa, config) === false).length
+    pendentes: caixas.filter((caixa) => caixa.status === 'finalizado' && bateu(caixa) === false).length
   };
 }
 
@@ -124,27 +124,27 @@ export function cascataGaveta(caixas: CaixaRelatorio[]) {
 
 export type Situacao = 'sem-caixa' | 'bateu' | 'nao-bateu' | 'em-aberto';
 /** Situação de cada unidade em cada dia: não bateu se algum caixa fechado do dia não bateu; aguardando marca caixa ainda não conferido. */
-export const situacaoPorDia = (caixas: CaixaRelatorio[], unidades: UnidadeRelatorio[], dias: string[], config: Configuracoes) =>
+export const situacaoPorDia = (caixas: CaixaRelatorio[], unidades: UnidadeRelatorio[], dias: string[]) =>
   unidades.map((unidade) => ({
     nome: unidade.nome,
     dias: dias.map((dia) => {
       const doDia = daUnidade(caixas, unidade.id).filter((caixa) => caixa.dia === dia);
-      const resultados = fechados(doDia).map((caixa) => bateu(caixa, config));
+      const resultados = fechados(doDia).map((caixa) => bateu(caixa));
       const situacao: Situacao = !doDia.length ? 'sem-caixa' : resultados.includes(false) ? 'nao-bateu' : resultados.length ? 'bateu' : 'em-aberto';
       return { dia, situacao, aguardando: doDia.some((caixa) => caixa.status === 'finalizado'), caixas: doDia };
     })
   }));
 
 /** Quebra de cada caixa fechado, para ver se as diferenças são centavos ou valores fora da curva. */
-export const pontosDeQuebra = (caixas: CaixaRelatorio[], config: Configuracoes) =>
-  fechados(caixas).map((caixa) => ({ id: caixa.id, unidade: caixa.unidade_nome, dia: caixa.dia, turno: caixa.turno, operador: caixa.usuario_nome, valor: caixa.diferenca_dinheiro, fora: quebraDinheiro(caixa, config) !== null }));
+export const pontosDeQuebra = (caixas: CaixaRelatorio[]) =>
+  fechados(caixas).map((caixa) => ({ id: caixa.id, unidade: caixa.unidade_nome, dia: caixa.dia, turno: caixa.turno, operador: caixa.usuario_nome, valor: caixa.diferenca_dinheiro, fora: quebraDinheiro(caixa) !== null }));
 
 /** Percentual de caixas fechados que bateram, por semana e unidade; null na semana sem caixa fechado. */
-export const taxaDeAcertoSemanal = (caixas: CaixaRelatorio[], unidades: UnidadeRelatorio[], config: Configuracoes) => {
+export const taxaDeAcertoSemanal = (caixas: CaixaRelatorio[], unidades: UnidadeRelatorio[]) => {
   const finalizados = fechados(caixas);
   return [...new Set(finalizados.map((caixa) => inicioDaSemana(caixa.dia)))].sort().map((semana) => ({
     semana,
-    ...Object.fromEntries(unidades.map((unidade) => { const daSemana = daUnidade(finalizados, unidade.id).filter((caixa) => inicioDaSemana(caixa.dia) === semana); return [unidade.id, daSemana.length ? daSemana.filter((caixa) => bateu(caixa, config)).length / daSemana.length : null]; }))
+    ...Object.fromEntries(unidades.map((unidade) => { const daSemana = daUnidade(finalizados, unidade.id).filter((caixa) => inicioDaSemana(caixa.dia) === semana); return [unidade.id, daSemana.length ? daSemana.filter((caixa) => bateu(caixa)).length / daSemana.length : null]; }))
   }));
 };
 
