@@ -218,3 +218,69 @@ describe('motivos de saída', () => {
     expect(await saidasDoCaixa(id)).toMatchObject([{ motivo: 'pão para a equipe', motivo_id: null }]);
   });
 });
+
+describe('usuários cadastrados pelo dono', () => {
+  const novo = (emailNovo: string) => ({ nome: 'Novo Colaborador', email: emailNovo, cargo: 'Caixa', tipo: 'funcionario', unidades: [unidades[0].id] });
+  const novaSenha = randomBytes(10).toString('hex');
+
+  it('entram sem senha e criam a senha no primeiro acesso com o código', async () => {
+    const { status, corpo } = await api('POST', '/usuarios', novo('primeiro@cofre.test'));
+    expect(status).toBe(201);
+    expect(corpo.codigo).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(corpo.usuario).toMatchObject({ email: 'primeiro@cofre.test', cargo: 'Caixa', tipo: 'funcionario', primeiro_acesso: 1, unidades: [unidades[0].id] });
+    expect((await api('POST', '/auth/login', { email: 'primeiro@cofre.test', senha: '' })).status).toBe(403);
+    const acesso = { email: 'primeiro@cofre.test', senha: novaSenha, confirmacao: novaSenha };
+    expect((await api('POST', '/auth/primeiro-acesso', { ...acesso, codigo: 'AAAA-AAAA' })).status).toBe(401);
+    const criado = await api('POST', '/auth/primeiro-acesso', { ...acesso, codigo: corpo.codigo.toLowerCase().replace('-', ' ') });
+    expect(criado.status).toBe(200);
+    expect((await api('GET', '/auth/me', undefined, criado.corpo.token)).corpo.usuario.email).toBe('primeiro@cofre.test');
+    expect((await api('POST', '/auth/primeiro-acesso', { ...acesso, codigo: corpo.codigo })).status).toBe(401);
+    expect((await api('POST', '/auth/login', { email: 'primeiro@cofre.test', senha: novaSenha })).status).toBe(200);
+    expect((await api('GET', '/usuarios')).corpo.find((item: { id: number }) => item.id === corpo.usuario.id).primeiro_acesso).toBe(0);
+  });
+
+  it('um código novo invalida o anterior e só vale para quem ainda não criou a senha', async () => {
+    const { corpo } = await api('POST', '/usuarios', novo('trocado@cofre.test'));
+    const trocado = await api('POST', `/usuarios/${corpo.usuario.id}/codigo-acesso`);
+    expect(trocado.corpo.codigo).not.toBe(corpo.codigo);
+    const acesso = { email: 'trocado@cofre.test', senha: novaSenha, confirmacao: novaSenha };
+    expect((await api('POST', '/auth/primeiro-acesso', { ...acesso, codigo: corpo.codigo })).status).toBe(401);
+    expect((await api('POST', '/auth/primeiro-acesso', { ...acesso, codigo: trocado.corpo.codigo })).status).toBe(200);
+    expect((await api('POST', `/usuarios/${corpo.usuario.id}/codigo-acesso`)).status).toBe(409);
+  });
+
+  it('só o dono cadastra, sem repetir e-mail e com cargo da lista', async () => {
+    expect((await api('POST', '/usuarios', novo('primeiro@cofre.test'))).status).toBe(409);
+    expect((await api('POST', '/usuarios', novo(email))).status).toBe(409);
+    expect((await api('POST', '/usuarios', { ...novo('cargo@cofre.test'), cargo: 'Gerente Geral' })).status).toBe(400);
+    const tokenFuncionario = (await api('POST', '/auth/login', { email: 'primeiro@cofre.test', senha: novaSenha })).corpo.token;
+    expect((await api('POST', '/usuarios', novo('outro@cofre.test'), tokenFuncionario)).status).toBe(403);
+  });
+});
+
+describe('inativação de usuários', () => {
+  async function usuarioComSenha(emailUsuario: string) {
+    const { corpo } = await api('POST', '/auth/register', { nome: 'Inativável', email: emailUsuario, senha, confirmacao: senha });
+    return { id: corpo.usuario.id as number, token: (await api('POST', '/auth/login', { email: emailUsuario, senha })).corpo.token as string };
+  }
+
+  it('corta o acesso na hora e a reativação devolve o mesmo usuário', async () => {
+    const usuario = await usuarioComSenha('inativo@cofre.test');
+    await api('PATCH', `/usuarios/${usuario.id}`, { cargo: 'Caixa', unidades: [unidades[1].id] });
+    expect((await api('DELETE', `/usuarios/${usuario.id}`)).status).toBe(200);
+    expect((await api('GET', '/auth/me', undefined, usuario.token)).status).toBe(401);
+    expect((await api('POST', '/auth/login', { email: 'inativo@cofre.test', senha })).status).toBe(401);
+    expect((await api('GET', '/usuarios')).corpo.find((item: { id: number }) => item.id === usuario.id)).toMatchObject({ ativo: 0, cargo: 'Caixa', unidades: [unidades[1].id] });
+    expect((await api('POST', '/usuarios', { nome: 'Outro', email: 'inativo@cofre.test', tipo: 'funcionario', unidades: [] })).corpo.erro).toMatch(/inativo/);
+    expect((await api('POST', `/usuarios/${usuario.id}/reativar`)).corpo.usuario).toMatchObject({ ativo: 1, cargo: 'Caixa' });
+    expect((await api('GET', '/auth/me', undefined, usuario.token)).status).toBe(200);
+  });
+
+  it('só o dono inativa e ele mesmo não pode ser inativado', async () => {
+    const usuario = await usuarioComSenha('protegido@cofre.test');
+    const dono = (await api('GET', '/auth/me')).corpo.usuario;
+    expect((await api('DELETE', `/usuarios/${dono.id}`)).status).toBe(409);
+    expect((await api('DELETE', `/usuarios/${dono.id}`, undefined, usuario.token)).status).toBe(403);
+    expect((await api('POST', `/usuarios/${usuario.id}/reativar`)).status).toBe(404);
+  });
+});

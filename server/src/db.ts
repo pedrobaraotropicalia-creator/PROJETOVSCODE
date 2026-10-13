@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS contagens_dinheiro (id INTEGER PRIMARY KEY AUTOINCREM
 `);
 try { db.exec("ALTER TABLE fechamentos ADD COLUMN turno TEXT NOT NULL DEFAULT 'ALMOÇO'"); } catch { /* coluna já existe */ }
 try { db.exec('ALTER TABLE usuarios ADD COLUMN cargo TEXT'); } catch { /* coluna já existe */ }
+// hash do código de primeiro acesso: preenchido enquanto o usuário cadastrado pelo dono não criou a senha (senha_hash fica '')
+try { db.exec('ALTER TABLE usuarios ADD COLUMN codigo_acesso TEXT'); } catch { /* coluna já existe */ }
 // ligado quando o dinheiro contado no fechamento fica na gaveta como troco do caixa seguinte da unidade
 try { db.exec('ALTER TABLE unidades ADD COLUMN troco_continua INTEGER NOT NULL DEFAULT 0'); } catch { /* coluna já existe */ }
 // valor de troco_continua da unidade quando o caixa foi finalizado; null nos caixas anteriores a esta coluna (o relatório usa o da unidade)

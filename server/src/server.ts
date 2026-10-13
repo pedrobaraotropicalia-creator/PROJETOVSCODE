@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
@@ -7,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import { z, ZodError } from 'zod';
 import { db, recalcularDiferencas } from './db';
 import { limites } from './limites';
+import { cargoRestringe, nomesCargos } from './cargos';
 
 const app = express();
 app.use(cors());
@@ -19,7 +21,7 @@ type User = { id: number; nome: string; email: string; tipo: 'funcionario' | 'ad
 type RequestWithUser = express.Request & { user?: User };
 const publicUser = (row: any): User => ({ id: row.id, nome: row.nome, email: row.email, tipo: row.email === adminEmail ? 'dono' : row.tipo, cargo: row.cargo || null });
 // usuários com cargo Caixa só enxergam os próprios fechamentos, mesmo com perfil admin
-const isCaixaOnly = (user?: User) => !!user && user.tipo !== 'dono' && String(user.cargo || '').trim().toLowerCase() === 'caixa';
+const isCaixaOnly = (user?: User) => !!user && user.tipo !== 'dono' && cargoRestringe(user.cargo);
 const auth = (req: RequestWithUser, res: express.Response, next: express.NextFunction) => {
   try { const token = (req.headers.authorization || '').replace('Bearer ', ''); if (!token) throw new Error(); const decoded = jwt.verify(token, secret) as unknown as { sub: number }; const row = db.prepare('SELECT * FROM usuarios WHERE id = ? AND ativo = 1').get(Number(decoded.sub)); if (!row) throw new Error(); req.user = publicUser(row); next(); } catch { res.status(401).json({ erro: 'Sessão inválida ou expirada.' }); }
 };
@@ -28,7 +30,6 @@ type Fechamento = { id: number; unidade_id: number; usuario_id: number; status: 
 type Etapa = 'saldo_inicial' | 'total_entradas' | 'total_maquininhas' | 'total_saidas' | 'dinheiro_fisico';
 const denominacoes = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
 const formasPagamento = ['credito', 'debito', 'pix', 'refeicao', 'alimentacao', 'dinheiro'] as const;
-const cargos = ['Colaborador', 'Caixa', 'Assistente Financeiro', 'Analista Financeiro', 'Supervisor Financeiro', 'Gerente Financeiro', 'Diretor Financeiro'];
 const centavos = (value: number) => Math.round(value * 100) / 100;
 const brl = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const texto = (obrigatorio: string, campo: string, max: number) => z.string({ error: obrigatorio }).trim().min(1, obrigatorio).max(max, `${campo} deve ter no máximo ${max} caracteres.`);
@@ -37,6 +38,12 @@ const emailSchema = z.string({ error: 'Informe um e-mail válido.' }).trim().toL
 const senhaSchema = z.string({ error: 'Informe a senha.' }).min(8, 'A senha deve ter pelo menos 8 caracteres.').refine((senha) => Buffer.byteLength(senha) <= limites.senhaBytes, `A senha deve ter no máximo ${limites.senhaBytes} caracteres (letras acentuadas contam como 2).`);
 const nomeUnidadeSchema = texto('Nome da unidade é obrigatório.', 'O nome da unidade', limites.nomeUnidade);
 const cadastroSchema = z.object({ nome: nomeUsuarioSchema, email: emailSchema, senha: senhaSchema, confirmacao: z.unknown() }).refine((dados) => dados.senha === dados.confirmacao, 'As senhas não conferem.');
+// código de primeiro acesso: 8 caracteres sem os que se confundem (0/O, 1/I), mostrado como XXXX-XXXX; o banco guarda só o hash
+const alfabetoCodigo = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const normalizarCodigo = (codigo: string) => codigo.toUpperCase().replace(/[^A-Z0-9]/g, '');
+const hashCodigo = (codigo: string) => createHash('sha256').update(normalizarCodigo(codigo)).digest('hex');
+const novoCodigoAcesso = () => { const codigo = Array.from({ length: 8 }, () => alfabetoCodigo[randomInt(alfabetoCodigo.length)]).join(''); return { codigo: `${codigo.slice(0, 4)}-${codigo.slice(4)}`, hash: hashCodigo(codigo) }; };
+const primeiroAcessoSchema = z.object({ email: emailSchema, codigo: z.string({ error: 'Informe o código de acesso.' }).max(limites.codigoAcesso, 'Código de acesso inválido.').refine((codigo) => normalizarCodigo(codigo).length > 0, 'Informe o código de acesso.'), senha: senhaSchema, confirmacao: z.unknown() }).refine((dados) => dados.senha === dados.confirmacao, 'As senhas não conferem.');
 const maquininhaSchema = z.object({ nome: texto('Informe o nome da maquininha.', 'O nome da maquininha', limites.nomeMaquininha), numero: texto('Informe o número da maquininha.', 'O número da maquininha', limites.numeroMaquininha), numero_serie: texto('Informe o número de série.', 'O número de série', limites.serieMaquininha) });
 const valorSchema = z.number({ error: 'Informe um valor numérico.' }).nonnegative('Valores não podem ser negativos.').max(limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`).transform(centavos);
 const contagensSchema = z.array(z.object({
@@ -109,8 +116,18 @@ app.post('/api/auth/register', async (req, res) => {
   const { nome, email: normalized, senha } = cadastroSchema.parse(req.body ?? {});
   try { const hash = await bcrypt.hash(senha, 10); const tipo = normalized === adminEmail ? 'dono' : 'funcionario'; const result = db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run(nome, normalized, hash, tipo); const row = db.prepare('SELECT * FROM usuarios WHERE id=?').get(result.lastInsertRowid); res.status(201).json({ usuario: publicUser(row) }); } catch { res.status(409).json({ erro: 'Este e-mail já está cadastrado.' }); }
 });
-app.post('/api/auth/login', async (req, res) => { const email = String(req.body?.email || '').trim().toLowerCase(); const row: any = db.prepare('SELECT * FROM usuarios WHERE email=? AND ativo=1').get(email); if (!row || !(await bcrypt.compare(String(req.body?.senha || ''), row.senha_hash))) return res.status(401).json({ erro: 'E-mail ou senha inválidos.' }); const usuario = publicUser(row); const token = jwt.sign({ sub: usuario.id }, secret, { expiresIn: '8h' }); res.json({ token, usuario }); });
-app.get('/api/auth/me', auth, (req: RequestWithUser, res) => res.json({ usuario: req.user }));
+app.post('/api/auth/login', async (req, res) => { const email = String(req.body?.email || '').trim().toLowerCase(); const row: any = db.prepare('SELECT * FROM usuarios WHERE email=? AND ativo=1').get(email); if (row?.codigo_acesso) return res.status(403).json({ erro: 'Você ainda não criou sua senha. Use o código de primeiro acesso que recebeu.' }); if (!row ||!(await bcrypt.compare(String(req.body?.senha || ''), row.senha_hash))) return res.status(401).json({ erro: 'E-mail ou senha inválidos.' }); const usuario = publicUser(row); const token = jwt.sign({ sub: usuario.id }, secret, { expiresIn: '8h' }); res.json({ token, usuario }); });
+// usuário cadastrado pelo dono cria a senha com o código e já entra; o código deixa de valer
+app.post('/api/auth/primeiro-acesso', async (req, res) => {
+  const { email, codigo, senha } = primeiroAcessoSchema.parse(req.body ?? {});
+  const row: any = db.prepare('SELECT * FROM usuarios WHERE email=? AND ativo=1 AND codigo_acesso IS NOT NULL').get(email);
+  if (!row || !timingSafeEqual(Buffer.from(row.codigo_acesso, 'hex'), Buffer.from(hashCodigo(codigo), 'hex'))) return res.status(401).json({ erro: 'E-mail ou código de acesso inválidos.' });
+  const hash = await bcrypt.hash(senha, 10);
+  if (!db.prepare('UPDATE usuarios SET senha_hash=?, codigo_acesso=NULL WHERE id=? AND codigo_acesso=?').run(hash, row.id, row.codigo_acesso).changes) return res.status(401).json({ erro: 'E-mail ou código de acesso inválidos.' });
+  const usuario = publicUser(row);
+  res.json({ token: jwt.sign({ sub: usuario.id }, secret, { expiresIn: '8h' }), usuario });
+});
+app.get('/api/auth/me', auth,(req: RequestWithUser, res) => res.json({ usuario: req.user }));
 app.get('/api/unidades', auth, (req: RequestWithUser, res) => res.json(req.user!.tipo === 'dono' ? db.prepare('SELECT * FROM unidades WHERE ativo=1 ORDER BY nome').all() : db.prepare('SELECT u.* FROM unidades u JOIN usuario_unidades v ON v.unidade_id=u.id WHERE u.ativo=1 AND v.usuario_id=? ORDER BY u.nome').all(req.user!.id)));
 app.post('/api/unidades', auth, allow('dono'), (req, res) => { const nome = nomeUnidadeSchema.parse(req.body?.nome); if (db.prepare('SELECT id FROM unidades WHERE nome=? AND ativo=0').get(nome)) return res.status(409).json({ erro: 'Já existe uma unidade excluída com este nome. Reative-a em Unidades excluídas.' }); try { const result = db.prepare('INSERT INTO unidades (nome) VALUES (?)').run(nome); res.status(201).json(db.prepare('SELECT * FROM unidades WHERE id=?').get(result.lastInsertRowid)); } catch { res.status(409).json({ erro: 'Esta unidade já existe.' }); } });
 app.patch('/api/unidades/:id', auth, allow('dono'), (req, res) => { const { nome, troco_continua } = unidadeSchema.parse(req.body); const updates: string[] = []; const params: unknown[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nome); } if (troco_continua !== undefined) { updates.push('troco_continua=?'); params.push(troco_continua ? 1 : 0); } if (!updates.length) return res.status(400).json({ erro: 'Nada para atualizar.' }); try { const result = db.prepare(`UPDATE unidades SET ${updates.join(', ')} WHERE id=? AND ativo=1`).run(...params, req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); } catch { res.status(409).json({ erro: 'Já existe uma unidade com este nome.' }); } });
@@ -296,10 +313,35 @@ app.put('/api/configuracoes', auth, allow('dono'), (req: RequestWithUser, res) =
   res.json({ ...lerConfiguracoes(), ve_diferenca: veDiferenca(req.user!), escolhe_data_caixa: escolheDataCaixa(req.user!) });
 });
 const comUnidades = <T extends { id: number }>(usuario: T) => ({ ...usuario, unidades: unidadesVinculadas(usuario.id) });
-app.get('/api/usuarios', auth, allow('admin', 'dono'), (_, res) => res.json((db.prepare('SELECT id,nome,email,tipo,cargo,ativo,criado_em FROM usuarios ORDER BY nome').all() as { id: number }[]).map(comUnidades)));
+// primeiro_acesso = 1 enquanto o usuário cadastrado pelo dono não criou a senha
+const colunasUsuario = 'id,nome,email,tipo,cargo,ativo,criado_em,codigo_acesso IS NOT NULL primeiro_acesso';
+const lerUsuario = (id: number) => comUnidades(db.prepare(`SELECT ${colunasUsuario} FROM usuarios WHERE id=?`).get(id) as { id: number });
+const unidadesUsuarioSchema = z.array(z.number().int().refine(unidadeAtiva, 'Unidade não encontrada.'), 'Informe a lista de unidades.');
+const novoUsuarioSchema = z.object({ nome: nomeUsuarioSchema, email: emailSchema, cargo: z.string().trim().refine((cargo) => !cargo || nomesCargos.includes(cargo), 'Cargo inválido.').optional().transform((cargo) => cargo || null), tipo: z.enum(['funcionario', 'admin'], 'Perfil inválido.'), unidades: unidadesUsuarioSchema });
+const salvarVinculos = (id: number, unidades: number[]) => { db.prepare('DELETE FROM usuario_unidades WHERE usuario_id=?').run(id); const insert = db.prepare('INSERT OR IGNORE INTO usuario_unidades (usuario_id, unidade_id) VALUES (?,?)'); unidades.forEach((unidadeId) => insert.run(id, unidadeId)); };
+app.get('/api/usuarios', auth, allow('admin', 'dono'), (_, res) => res.json((db.prepare(`SELECT ${colunasUsuario} FROM usuarios ORDER BY nome`).all() as { id: number }[]).map(comUnidades)));
+// o dono cadastra sem senha: o usuário cria a senha no primeiro acesso com o código, que só aparece aqui e ao gerar outro
+app.post('/api/usuarios', auth, allow('dono'), (req, res) => {
+  const { nome, email, cargo, tipo, unidades } = novoUsuarioSchema.parse(req.body ?? {});
+  const existente = db.prepare('SELECT ativo FROM usuarios WHERE email=?').get(email) as { ativo: number } | undefined;
+  if (existente?.ativo === 0) return res.status(409).json({ erro: 'Já existe um usuário inativo com este e-mail. Reative-o na lista de usuários, na situação Inativos.' });
+  if (email === adminEmail || existente) return res.status(409).json({ erro: 'Este e-mail já está cadastrado.' });
+  const { codigo, hash } = novoCodigoAcesso();
+  const id = db.transaction(() => {
+    const novoId = Number(db.prepare("INSERT INTO usuarios (nome,email,senha_hash,tipo,cargo,codigo_acesso) VALUES (?,?,'',?,?,?)").run(nome, email, tipo, cargo, hash).lastInsertRowid);
+    salvarVinculos(novoId, unidades);
+    return novoId;
+  })();
+  res.status(201).json({ usuario: lerUsuario(id), codigo });
+});
+// inativação (exclusão lógica): o acesso cai na hora, porque o middleware auth exige ativo=1; caixas, vínculos e cargo ficam para a reativação
+app.delete('/api/usuarios/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const alvo = db.prepare('SELECT id, email FROM usuarios WHERE id=? AND ativo=1').get(req.params.id) as { id: number; email: string } | undefined; if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado.' }); if (alvo.email === adminEmail || alvo.id === req.user!.id) return res.status(409).json({ erro: 'O dono do sistema não pode ser inativado.' }); db.prepare('UPDATE usuarios SET ativo=0 WHERE id=?').run(alvo.id); res.json({ mensagem: 'Usuário inativado.' }); });
+app.post('/api/usuarios/:id/reativar', auth, allow('dono'), (req, res) => { if (!db.prepare('UPDATE usuarios SET ativo=1 WHERE id=? AND ativo=0').run(req.params.id).changes) return res.status(404).json({ erro: 'Usuário inativo não encontrado.' }); res.json({ usuario: lerUsuario(Number(req.params.id)) }); });
+// troca o código de quem ainda não criou a senha; o anterior deixa de valer
+app.post('/api/usuarios/:id/codigo-acesso', auth, allow('dono'), (req, res) => { const alvo = db.prepare('SELECT codigo_acesso FROM usuarios WHERE id=? AND ativo=1').get(req.params.id) as { codigo_acesso: string | null } | undefined; if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado.' }); if (!alvo.codigo_acesso) return res.status(409).json({ erro: 'Este usuário já criou a senha.' }); const { codigo, hash } = novoCodigoAcesso(); db.prepare('UPDATE usuarios SET codigo_acesso=? WHERE id=?').run(hash, req.params.id); res.json({ codigo }); });
 app.patch('/api/usuarios/:id/tipo', auth, allow('dono'), (req, res) => { const tipo = ['funcionario', 'admin'].includes(req.body?.tipo) ? req.body.tipo : null; if (!tipo) return res.status(400).json({ erro: 'Perfil inválido.' }); db.prepare('UPDATE usuarios SET tipo=? WHERE id=? AND email<>?').run(tipo, req.params.id, adminEmail); res.json({ mensagem: 'Perfil atualizado.' }); });
-app.patch('/api/usuarios/:id', auth, allow('dono'), async (req, res) => { const id = Number(req.params.id); const target: any = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id); if (!target) return res.status(404).json({ erro: 'Usuário não encontrado.' }); const isOwnerAccount = target.email === adminEmail; const { nome, email, senha, cargo, tipo, unidades } = req.body || {}; const updates: string[] = []; const params: any[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nomeUsuarioSchema.parse(nome)); } if (email !== undefined) { updates.push('email=?'); params.push(emailSchema.parse(email)); } if (senha) { updates.push('senha_hash=?'); params.push(await bcrypt.hash(senhaSchema.parse(senha), 10)); } // cargos fora da lista que já existiam continuam válidos para quem já os tem
-if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !cargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : z.array(z.number().int().refine(unidadeAtiva, 'Unidade não encontrada.'), 'Informe a lista de unidades.').parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => { db.prepare('DELETE FROM usuario_unidades WHERE usuario_id=?').run(id); const insert = db.prepare('INSERT OR IGNORE INTO usuario_unidades (usuario_id, unidade_id) VALUES (?,?)'); novasUnidades.forEach((unidadeId) => insert.run(id, unidadeId)); })(); const row = db.prepare('SELECT id,nome,email,tipo,cargo,ativo,criado_em FROM usuarios WHERE id=?').get(id) as { id: number }; res.json({ usuario: comUnidades(row) }); });
+app.patch('/api/usuarios/:id', auth, allow('dono'), async (req, res) => { const id = Number(req.params.id); const target: any = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id); if (!target) return res.status(404).json({ erro: 'Usuário não encontrado.' }); const isOwnerAccount = target.email === adminEmail; const { nome, email, senha, cargo, tipo, unidades } = req.body || {}; const updates: string[] = []; const params: any[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nomeUsuarioSchema.parse(nome)); } if (email !== undefined) { updates.push('email=?'); params.push(emailSchema.parse(email)); } if (senha) { updates.push('senha_hash=?', 'codigo_acesso=NULL'); params.push(await bcrypt.hash(senhaSchema.parse(senha), 10)); } // cargos fora da lista que já existiam continuam válidos para quem já os tem
+if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !nomesCargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : unidadesUsuarioSchema.parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => salvarVinculos(id, novasUnidades))(); res.json({ usuario: lerUsuario(id) }); });
 // serve o SPA compilado do client quando o build estiver disponível (deploy em container único)
 const clientDist = path.resolve(__dirname, '../../dist/client');
 app.use(express.static(clientDist));

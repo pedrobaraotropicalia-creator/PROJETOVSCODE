@@ -5,6 +5,7 @@
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "tsx watch server/src/server.ts",
     "server:seed": "tsx server/src/seed.ts",
+    "server:gerar-caixas": "tsx server/src/gerarCaixas.ts",
     "client:dev": "vite --config client/vite.config.ts",
     "build": "tsc -p server/tsconfig.json && vite build --config client/vite.config.ts",
     "start": "node server/dist/server.js",

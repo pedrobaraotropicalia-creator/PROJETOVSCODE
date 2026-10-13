@@ -4,6 +4,7 @@ export const limites = {
   nomeUsuario: 80,
   email: 254, // RFC 5321
   senhaBytes: 72, // o bcrypt ignora o que passa de 72 bytes
+  codigoAcesso: 20, // o código tem 8 caracteres; sobra para traço e espaços digitados
   nomeUnidade: 50,
   nomeMaquininha: 40,
   numeroMaquininha: 20,
