@@ -50,16 +50,16 @@ export default function Auditoria({ recarga, onAbrirCaixa }: { recarga: number; 
       {JSON.stringify(filtro) !== JSON.stringify(filtroPadrao()) && <button className="ghost" onClick={() => setFiltro(filtroPadrao())}>Limpar filtros</button>}
     </div>
     <div className="filter-summary">{carregando ? 'Carregando…' : `${filtrados.length} ${filtrados.length === 1 ? 'alteração' : 'alterações'}`}</div>
-    <div className="table-wrap"><table className="tabela-auditoria">
+    <div className="table-wrap"><table className="tabela-auditoria tabela-cartoes">
       <colgroup><col className="col-quando" /><col className="col-quem" /><col className="col-acao" /><col className="col-registro" /><col /></colgroup>
       <thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Registro</th><th>De → para</th></tr></thead>
       <tbody>
         {paginar(filtrados, paginaAtual).map((item) => <tr key={item.id}>
-          <td className="auditoria-quando">{formatDateTime(item.criado_em)}</td>
-          <td><span className="auditoria-quem" title={item.usuario_nome}>{item.usuario_nome}</span></td>
-          <td><span className={seloDaAcao(item.acao)}>{item.acao}</span></td>
+          <td className="auditoria-quando cartao-meta">{formatDateTime(item.criado_em)}</td>
+          <td className="cartao-meta"><span className="auditoria-quem" title={item.usuario_nome}>{item.usuario_nome}</span></td>
+          <td className="cartao-destaque"><span className={seloDaAcao(item.acao)}>{item.acao}</span></td>
           {/* caixa ainda existente abre a consulta (/caixas-fechados/:id); os demais registros são só texto */}
-          <td><div className="auditoria-registro">{item.entidade === 'caixa' && item.entidade_id && item.acao !== 'Excluiu' ? <button type="button" className="link-registro" title={`Abrir a consulta: ${item.descricao}`} onClick={() => onAbrirCaixa(item.entidade_id!)}>{item.descricao}</button> : <strong className="auditoria-descricao" title={item.descricao}>{item.descricao}</strong>}<small className="muted">{entidades[item.entidade] ?? item.entidade}</small></div></td>
+          <td className="cartao-titulo"><div className="auditoria-registro">{item.entidade === 'caixa' && item.entidade_id && item.acao !== 'Excluiu' ? <button type="button" className="link-registro" title={`Abrir a consulta: ${item.descricao}`} onClick={() => onAbrirCaixa(item.entidade_id!)}>{item.descricao}</button> : <strong className="auditoria-descricao" title={item.descricao}>{item.descricao}</strong>}<small className="muted">{entidades[item.entidade] ?? item.entidade}</small></div></td>
           <td>
             <ul className={`de-para ${abertas.has(item.id) ? 'de-para-aberto' : ''}`}>{(abertas.has(item.id) ? item.alteracoes : visiveis(item.alteracoes)).map((alteracao, indice) => <li key={indice} title={textoDaAlteracao(alteracao)}>
               <span className="de-para-campo">{alteracao.campo}:</span>{' '}

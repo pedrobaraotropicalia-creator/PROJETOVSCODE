@@ -4,7 +4,10 @@ import { Icone } from './icones';
 type Unit = { id: number; nome: string };
 type Opcao = { value: number; label: string };
 
-const OpcaoComCheckbox = (props: OptionProps<Opcao, true>) => <components.Option {...props}><span className="multi-check" aria-hidden="true">{props.isSelected && <Icone nome="check" />}</span>{props.label}</components.Option>;
+// no toque não há busca (a lista é curta e o campo de busca abriria o teclado por cima de metade da tela) e as opções ganham altura de dedo
+const toque = window.matchMedia('(pointer: coarse)').matches;
+
+const OpcaoComCheckbox =(props: OptionProps<Opcao, true>) => <components.Option {...props}><span className="multi-check" aria-hidden="true">{props.isSelected && <Icone nome="check" />}</span>{props.label}</components.Option>;
 
 // mesmo visual do padrão de select em styles.css
 const estilos: StylesConfig<Opcao, true> = {
@@ -19,7 +22,7 @@ const estilos: StylesConfig<Opcao, true> = {
   multiValueRemove: (base) => ({ ...base, color: '#217c68', borderRadius: '0 20px 20px 0', '&:hover': { background: '#d5e9e3', color: '#b44e38' } }),
   menu: (base) => ({ ...base, borderRadius: 3, boxShadow: '0 8px 24px #0c253b26', border: '1px solid #e3eaec' }),
   menuPortal: (base) => ({ ...base, zIndex: 20 }),
-  option: (base, state) => ({ ...base, display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer', color: '#18324a', fontWeight: state.isSelected ? 600 : 400, background: state.isFocused ? '#f4f8f7' : 'transparent', '&:active': { background: '#e9f3f0' } })
+  option: (base, state) => ({ ...base, display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, ...(toque ? { minHeight: 44 } : {}), cursor: 'pointer', color: '#18324a', fontWeight: state.isSelected ? 600 : 400, background: state.isFocused ? '#f4f8f7' : 'transparent', '&:active': { background: '#e9f3f0' } })
 };
 
 /** Seleção de várias unidades; o menu fica aberto enquanto as opções são marcadas. */
@@ -31,6 +34,9 @@ export default function UnitMultiSelect({ units, value, onChange, placeholder = 
     value={opcoes.filter((opcao) => value.includes(opcao.value))}
     onChange={(selecionadas) => onChange(selecionadas.map((opcao) => opcao.value))}
     closeMenuOnSelect={false}
+    // o padrão do react-select em tela de toque é tirar o foco a cada escolha, o que fechava o menu a cada unidade marcada
+    blurInputOnSelect={false}
+    isSearchable={!toque}
     hideSelectedOptions={false}
     placeholder={placeholder}
     noOptionsMessage={() => 'Nenhuma unidade'}

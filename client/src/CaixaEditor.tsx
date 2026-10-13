@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import DataInput from './DataInput';
 import { diaBrasilia, formatDay, parseDate } from './datas';
 import { money, request } from './api';
@@ -35,7 +35,8 @@ const countsTotal = (counts: Counts) => denominacoes.reduce((sum, denominacao) =
 function CountGrid({ variant, kicker, title, description, counts, onChange }: { variant: Contagem['etapa']; kicker: string; title: string; description: string; counts: Counts; onChange: (counts: Counts) => void }) {
   return <div className={`cash-count-box ${variant === 'abertura' ? 'cash-opening' : 'cash-closing'}`}>
     <div className="cash-count-heading"><span className="cash-count-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div>
-    <div className="cash-count-grid">{denominacoes.map((denominacao) => <label key={denominacao}>{denominacao >= 2 ? 'Nota' : 'Moeda'} de {money(denominacao)}<QuantityInput value={counts[denominacao]} onChange={(value) => onChange({ ...counts, [denominacao]: value })} /></label>)}</div>
+    {/* a linha entre notas e moedas ocupa a linha inteira da grade: as moedas começam numa linha nova em qualquer largura */}
+    <div className="cash-count-grid">{denominacoes.map((denominacao) => <Fragment key={denominacao}>{denominacao === 1 && <div className="cash-count-divisor" aria-hidden="true" />}<label>{denominacao >= 2 ? 'Nota' : 'Moeda'} de {money(denominacao)}<QuantityInput value={counts[denominacao]} onChange={(value) => onChange({ ...counts, [denominacao]: value })} /></label></Fragment>)}</div>
     <strong className="cash-count-total">Total: {money(countsTotal(counts))}</strong>
   </div>;
 }
@@ -43,7 +44,8 @@ function CountGrid({ variant, kicker, title, description, counts, onChange }: { 
 function AberturaStep({ data, units, escolheData, onSubmit }: { data: Detalhe | null; units: Unit[]; escolheData: boolean; onSubmit: (body: object) => void }) {
   const [dataCaixa, setDataCaixa] = useState(formatDay(data?.fechamento.data_caixa ?? diaBrasilia(new Date())));
   const [erroData, setErroData] = useState('');
-  const [unit, setUnit] = useState(data ? String(data.fechamento.unidade_id) : '');
+  // quem só tem uma unidade vinculada não precisa escolher
+  const [unit, setUnit] = useState(data ? String(data.fechamento.unidade_id) : units.length === 1 ? String(units[0].id) : '');
   const [turno, setTurno] = useState(data?.fechamento.turno || 'ALMOÇO');
   const [counts, setCounts] = useState(countsFrom(data, 'abertura'));
   const { confirmar } = useDialogos();

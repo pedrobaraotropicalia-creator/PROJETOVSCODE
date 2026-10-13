@@ -2,7 +2,7 @@ import { Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart,
 import { money } from './api';
 import { formatDay } from './datas';
 import { cascataGaveta, diasDoPeriodo, pontosDeQuebra, resultadoConferencia, situacaoPorDia, taxaDeAcertoSemanal, type Situacao } from './relatorioDados';
-import { legenda, cores, corDaUnidade, dica, diaCurto, eixo, Grafico, Legenda, moedaCurta, percentual, nomeCurto, SemDados, useEixoDeNomes } from './graficos';
+import { legenda, cores, corDaUnidade, dica, diaCurto, eixo, Grafico, Legenda, moedaCurta, percentual, nomeCurto, SemDados, useEixoDeNomes, useTelaEstreita } from './graficos';
 import type { DadosRelatorio } from './Relatorios';
 
 const corDaEtapa = { total: cores.atual, saida: cores.neutro, falta: cores.falta, sobra: cores.sobra };
@@ -17,22 +17,24 @@ const espalhar = (id: number) => ((id * 9301 + 49297) % 233280) / 233280 * 0.5 -
 
 export default function RelatorioQuebras({ caixas, unidades, todasUnidades, de, ate }: DadosRelatorio) {
   const larguraNomes = useEixoDeNomes();
+  const estreita = useTelaEstreita();
   if (!caixas.length) return <SemDados />;
   const cascata = cascataGaveta(caixas).map((etapa) => ({ ...etapa, base: Math.min(etapa.inicio, etapa.fim), altura: Math.abs(etapa.fim - etapa.inicio) }));
   const calendario = situacaoPorDia(caixas, unidades, diasDoPeriodo(de, ate));
   const pontos = pontosDeQuebra(caixas).map((ponto) => ({ ...ponto, posicao: unidades.findIndex((unidade) => unidade.nome === ponto.unidade) + espalhar(ponto.id) }));
   return <div className="relatorio-grid">
     <Grafico largo titulo="Movimento do dinheiro da gaveta" descricao="Soma dos caixas fechados. Esperado = entradas em dinheiro − saídas. Apurado = dinheiro contado no fechamento − saldo inicial. A diferença é a quebra.">
-      <ResponsiveContainer width="100%" height={280}>
-        <BarChart data={cascata} margin={{ top: 24, right: 16, bottom: 0, left: 0 }}>
-          <CartesianGrid stroke={cores.grade} vertical={false} />
-          <XAxis dataKey="etapa" {...eixo} interval={0} />
-          <YAxis tickFormatter={moedaCurta} {...eixo} width={72} />
+      {/* no celular as cinco colunas não cabem (nomes e valores se sobrepunham): as etapas viram linhas, com o valor curto ao lado da barra */}
+      <ResponsiveContainer width="100%" height={estreita ? 240 : 280}>
+        <BarChart data={cascata} layout={estreita ? 'vertical' : 'horizontal'} margin={estreita ? { top: 0, right: 72, bottom: 0, left: 0 } : { top: 24, right: 16, bottom: 0, left: 0 }}>
+          <CartesianGrid stroke={cores.grade} vertical={estreita} horizontal={!estreita} />
+          {estreita ? <XAxis type="number" tickFormatter={moedaCurta} {...eixo} /> : <XAxis dataKey="etapa" {...eixo} interval={0} />}
+          {estreita ? <YAxis type="category" dataKey="etapa" {...eixo} width={larguraNomes} interval={0} /> : <YAxis tickFormatter={moedaCurta} {...eixo} width={72} />}
           <Tooltip {...dica} cursor={{ fill: '#f4f8f7' }} content={({ active, payload }) => active && payload?.length ? <div className="grafico-dica"><strong>{payload[0].payload.etapa}</strong>{money(payload[0].payload.valor)}</div> : null} />
           <Bar dataKey="base" stackId="cascata" fill="transparent" isAnimationActive={false} />
-          <Bar dataKey="altura" stackId="cascata" radius={[4, 4, 0, 0]} barSize={48}>
+          <Bar dataKey="altura" stackId="cascata" radius={estreita ? [0, 4, 4, 0] : [4, 4, 0, 0]} barSize={estreita ? 26 : 48}>
             {cascata.map((etapa) => <Cell key={etapa.etapa} fill={corDaEtapa[etapa.tipo]} />)}
-            <LabelList dataKey="valor" position="top" formatter={(valor) => money(Number(valor))} fill="#18324a" fontSize={11} />
+            <LabelList dataKey="valor" position={estreita ? 'right' : 'top'} formatter={(valor) => (estreita ? moedaCurta : money)(Number(valor))} fill="#18324a" fontSize={11} />
           </Bar>
         </BarChart>
       </ResponsiveContainer>

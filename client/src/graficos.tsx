@@ -22,12 +22,17 @@ export const dica = { contentStyle: { borderRadius: 3, border: '1px solid #e3eae
 export const legenda = { itemSorter: null, wrapperStyle: { fontSize: 12 }, formatter: (valor: string) => <span style={{ color: '#18324a' }} title={valor}>{nomeCurto(valor, 32)}</span> };
 export const dicaMoeda = (valor: unknown) => money(Number(valor));
 
+/** Tela de celular (a mesma quebra do layout em styles.css): os gráficos trocam para versões que cabem em ~300px. */
+export function useTelaEstreita() {
+  const consulta = '(max-width: 800px)';
+  const [estreita, setEstreita] = useState(() => window.matchMedia(consulta).matches);
+  useEffect(() => { const midia = window.matchMedia(consulta); const mudar = () => setEstreita(midia.matches); midia.addEventListener('change', mudar); return () => midia.removeEventListener('change', mudar); }, []);
+  return estreita;
+}
+
 /** Largura do eixo de nomes nas barras horizontais: menor no celular para sobrar espaço para as barras. */
 export function useEixoDeNomes() {
-  const consulta = '(max-width: 800px)';
-  const [estreito, setEstreito] = useState(() => window.matchMedia(consulta).matches);
-  useEffect(() => { const midia = window.matchMedia(consulta); const mudar = () => setEstreito(midia.matches); midia.addEventListener('change', mudar); return () => midia.removeEventListener('change', mudar); }, []);
-  return estreito ? 96 : 150;
+  return useTelaEstreita() ? 96 : 150;
 }
 
 export function Grafico({ titulo, descricao, children, largo }: { titulo: string; descricao?: string; children: ReactNode; largo?: boolean }) {

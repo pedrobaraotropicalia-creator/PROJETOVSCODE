@@ -3,7 +3,7 @@ import { money } from './api';
 import { formatDay } from './datas';
 import { formasPagamento } from './quebra';
 import { mediaPorCaixa, mixPagamento, mixPorUnidade, mixSemanal, nomesDiasDaSemana, porDiaDaSemana, porMaquininha, porTurno } from './relatorioDados';
-import { legenda, cores, corDaUnidade, dica, dicaMoeda, diaCurto, eixo, Grafico, MapaDeCalor, moedaCurta, percentual, nomeCurto, SemDados, useEixoDeNomes } from './graficos';
+import { legenda, cores, corDaUnidade, dica, dicaMoeda, diaCurto, eixo, Grafico, MapaDeCalor, moedaCurta, percentual, nomeCurto, SemDados, useEixoDeNomes, useTelaEstreita } from './graficos';
 import type { DadosRelatorio } from './Relatorios';
 
 // seis formas em linhas não se distinguem; na evolução semanal elas viram quatro grupos
@@ -16,24 +16,27 @@ const grupos = [
 
 export default function RelatorioFaturamento({ caixas, unidades, todasUnidades }: DadosRelatorio) {
   const larguraNomes = useEixoDeNomes();
+  const estreita = useTelaEstreita();
   if (!caixas.length) return <SemDados />;
   const mix = mixPagamento(caixas);
   const semanas = mixSemanal(caixas).map((semana) => ({ semana: semana.semana, ...Object.fromEntries(grupos.map((grupo) => [grupo.chave, grupo.formas.reduce((total, forma) => total + semana.participacao[forma], 0)])) }));
   const semana = porDiaDaSemana(caixas, unidades);
+  const turnos = porTurno(caixas, unidades);
   const porUnidadeMix = mixPorUnidade(caixas, unidades);
   const maquininhas = porMaquininha(caixas, unidades);
   const medias = mediaPorCaixa(caixas, unidades);
   return <div className="relatorio-grid">
     <Grafico titulo="Almoço e jantar" descricao="Faturamento de cada turno por unidade">
-      <ResponsiveContainer width="100%" height={260}>
-        <BarChart data={porTurno(caixas, unidades)} margin={{ top: 20, right: 8, bottom: 0, left: 0 }} barGap={2}>
-          <CartesianGrid stroke={cores.grade} vertical={false} />
-          <XAxis dataKey="nome" {...eixo} interval={0} tickFormatter={(nome: string) => nomeCurto(nome, 14)} />
-          <YAxis tickFormatter={moedaCurta} {...eixo} width={72} />
+      {/* no celular os nomes das unidades se sobrepunham embaixo das colunas: as unidades viram linhas, com o nome ao lado */}
+      <ResponsiveContainer width="100%" height={estreita ? 60 + turnos.length * 56 : 260}>
+        <BarChart data={turnos} layout={estreita ? 'vertical' : 'horizontal'} margin={{ top: estreita ? 0 : 20, right: estreita ? 16 : 8, bottom: 0, left: 0 }} barGap={2}>
+          <CartesianGrid stroke={cores.grade} vertical={estreita} horizontal={!estreita} />
+          {estreita ? <XAxis type="number" tickFormatter={moedaCurta} {...eixo} /> : <XAxis dataKey="nome" {...eixo} interval={0} tickFormatter={(nome: string) => nomeCurto(nome, 14)} />}
+          {estreita ? <YAxis type="category" dataKey="nome" {...eixo} width={larguraNomes} interval={0} /> : <YAxis tickFormatter={moedaCurta} {...eixo} width={72} />}
           <Tooltip {...dica} formatter={dicaMoeda} cursor={{ fill: '#f4f8f7' }} />
           <Legend {...legenda} />
-          <Bar dataKey="almoco" name="Almoço" fill="#86b6ef" radius={[4, 4, 0, 0]} barSize={22} />
-          <Bar dataKey="jantar" name="Jantar" fill={cores.atual} radius={[4, 4, 0, 0]} barSize={22} />
+          <Bar dataKey="almoco" name="Almoço" fill="#86b6ef" radius={estreita ? [0, 4, 4, 0] : [4, 4, 0, 0]} barSize={estreita ? 14 : 22} />
+          <Bar dataKey="jantar" name="Jantar" fill={cores.atual} radius={estreita ? [0, 4, 4, 0] : [4, 4, 0, 0]} barSize={estreita ? 14 : 22} />
         </BarChart>
       </ResponsiveContainer>
     </Grafico>

@@ -72,15 +72,15 @@ export default function Cofre({ units, recarga, onAbrirCaixa }: { units: Unit[];
         {JSON.stringify(filtro) !== JSON.stringify(filtroPadrao()) && <button type="button" className="ghost" onClick={() => setFiltro(filtroPadrao())}>Limpar filtros</button>}
       </div>
       {extrato.totais.length > 0 && <div className="table-wrap cofre-totais"><table><thead><tr><th>Tipo</th><th>Entradas</th><th>Saídas</th></tr></thead><tbody>{Object.keys(nomesTipo).map((tipo) => extrato.totais.find((total) => total.tipo === tipo)).filter((total) => total !== undefined).map((total) => <tr key={total.tipo}><td><strong>{nomesTipo[total.tipo]}</strong></td><td className={cor(total.entradas)}>{total.entradas ? money(total.entradas) : '—'}</td><td className={cor(-total.saidas)}>{total.saidas ? money(total.saidas) : '—'}</td></tr>)}</tbody></table></div>}
-      <div className="table-wrap"><table className="cofre-extrato"><thead><tr><th>Data</th><th>Unidade</th><th>Movimentação</th><th>Valor</th><th>Observação</th><th>Lançado por</th><th>Ações</th></tr></thead><tbody>
+      <div className="table-wrap"><table className="cofre-extrato tabela-cartoes"><thead><tr><th>Data</th><th>Unidade</th><th>Movimentação</th><th>Valor</th><th>Observação</th><th>Lançado por</th><th>Ações</th></tr></thead><tbody>
         {extrato.movimentacoes.length ? paginar(extrato.movimentacoes, paginaAtual).map((mov) => <tr key={mov.chave} className={mov.ativo ? '' : 'cofre-excluida'}>
-          <td>{formatDay(mov.data)}</td>
-          <td><span className="texto-livre">{mov.unidade_nome}</span></td>
-          <td><strong>{descricao(mov)}</strong></td>
-          <td className={`close-diff ${cor(mov.valor)}`}>{money(mov.valor)}</td>
-          <td><span className="texto-livre">{mov.observacao || '—'}</span></td>
-          <td><span className="texto-livre">{mov.usuario_nome}</span><small className="cofre-quando">{formatDateTime(mov.criado_em)}</small>{!mov.ativo && mov.excluido_em && <small className="cofre-quando">Excluída por {mov.excluido_por_nome} em {formatDateTime(mov.excluido_em)}</small>}</td>
-          <td>{mov.fechamento_id ? <button type="button" className="row-action" onClick={() => onAbrirCaixa(mov.fechamento_id!)}>Ver caixa</button> : mov.ativo ? <button type="button" className="row-action row-action-danger" title="Excluir movimentação" aria-label={`Excluir ${descricao(mov)} de ${formatDay(mov.data)}`} onClick={() => excluir(mov)}><Icone nome="lixeira" /></button> : null}</td>
+          <td className="cartao-meta">{formatDay(mov.data)}</td>
+          <td className="cartao-meta"><span className="texto-livre">{mov.unidade_nome}</span></td>
+          <td className="cartao-titulo"><strong>{descricao(mov)}</strong></td>
+          <td className={`close-diff cartao-destaque ${cor(mov.valor)}`}>{money(mov.valor)}</td>
+          <td data-rotulo="Observação" className={mov.observacao ? '' : 'sem-valor'}><span className="texto-livre">{mov.observacao || '—'}</span></td>
+          <td data-rotulo="Lançado por"><span className="texto-livre">{mov.usuario_nome}</span><small className="cofre-quando">{formatDateTime(mov.criado_em)}</small>{!mov.ativo && mov.excluido_em && <small className="cofre-quando">Excluída por {mov.excluido_por_nome} em {formatDateTime(mov.excluido_em)}</small>}</td>
+          <td className={`cartao-acoes ${mov.fechamento_id || mov.ativo ? '' : 'sem-valor'}`}>{mov.fechamento_id ? <button type="button" className="row-action" onClick={() => onAbrirCaixa(mov.fechamento_id!)}>Ver caixa</button> : mov.ativo ? <button type="button" className="row-action row-action-danger" title="Excluir movimentação" aria-label={`Excluir ${descricao(mov)} de ${formatDay(mov.data)}`} onClick={() => excluir(mov)}><Icone nome="lixeira" /></button> : null}</td>
         </tr>) : <tr><td colSpan={7} className="empty">Nenhuma movimentação no filtro.</td></tr>}
       </tbody></table></div>
       <Paginacao total={extrato.movimentacoes.length} pagina={paginaAtual} onChange={setPagina} />
