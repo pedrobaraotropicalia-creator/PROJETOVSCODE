@@ -70,6 +70,11 @@ if (!colunasFechamento.includes('diferenca_dinheiro')) db.transaction(() => {
   db.exec('ALTER TABLE fechamentos ADD COLUMN diferenca_cartoes REAL NOT NULL DEFAULT 0');
   db.exec(recalcularDiferencasSql);
 })();
+// auditoria: cada alteração feita pelas rotas (auditoria.ts), com quem, quando, o registro e o de/para dos campos que mudaram (JSON)
+db.exec(`CREATE TABLE IF NOT EXISTS auditoria (id INTEGER PRIMARY KEY AUTOINCREMENT, criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, usuario_id INTEGER NOT NULL REFERENCES usuarios(id), entidade TEXT NOT NULL, entidade_id INTEGER, acao TEXT NOT NULL, descricao TEXT NOT NULL, alteracoes TEXT NOT NULL DEFAULT '[]');
+CREATE INDEX IF NOT EXISTS auditoria_criado_em ON auditoria(criado_em);`);
+// unidade do registro, para o admin ver só as vinculadas; as linhas anteriores à coluna ficam null e só o dono as vê
+try { db.exec('ALTER TABLE auditoria ADD COLUMN unidade_id INTEGER'); } catch { /* coluna já existe */ }
 const recalcularDiferencasStmt = db.prepare(`${recalcularDiferencasSql} WHERE id=?`);
 export const recalcularDiferencas = (id: number) => recalcularDiferencasStmt.run(id);
 

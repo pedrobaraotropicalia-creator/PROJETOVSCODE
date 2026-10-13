@@ -75,7 +75,7 @@ const limpar = db.transaction(() => {
   db.prepare(`DELETE FROM maquininhas WHERE numero_serie LIKE '${prefixoSerie}%' AND id NOT IN (SELECT maquininha_id FROM detalhes_maquininha)`).run();
   db.prepare(`UPDATE maquininhas SET ativo=0 WHERE numero_serie LIKE '${prefixoSerie}%'`).run();
   db.prepare(`DELETE FROM usuario_unidades WHERE usuario_id IN (${usuariosGerados})`).run();
-  db.prepare(`DELETE FROM usuarios WHERE id IN (${usuariosGerados}) AND id NOT IN (SELECT usuario_id FROM fechamentos UNION SELECT conferido_por FROM fechamentos WHERE conferido_por IS NOT NULL UNION SELECT usuario_id FROM cofre_movimentacoes UNION SELECT excluido_por FROM cofre_movimentacoes WHERE excluido_por IS NOT NULL)`).run();
+  db.prepare(`DELETE FROM usuarios WHERE id IN (${usuariosGerados}) AND id NOT IN (SELECT usuario_id FROM fechamentos UNION SELECT conferido_por FROM fechamentos WHERE conferido_por IS NOT NULL UNION SELECT usuario_id FROM cofre_movimentacoes UNION SELECT excluido_por FROM cofre_movimentacoes WHERE excluido_por IS NOT NULL UNION SELECT usuario_id FROM auditoria)`).run();
   db.prepare(`UPDATE usuarios SET ativo=0 WHERE email LIKE '%${dominio}'`).run();
   return caixas;
 });

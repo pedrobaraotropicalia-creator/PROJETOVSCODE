@@ -166,3 +166,15 @@ aside nav .nav-label{display:block;height:1px;margin:10px 14px;background:#fffff
 .auth-shell .auth-card .link-button{color:var(--tropicalia-vermelho)}
 .auth-shell .auth-card input:focus{border-color:var(--tropicalia-ambar);box-shadow:0 0 0 3px #e29a3033}
 @media(max-width:800px){.auth-shell .auth-copy{padding:32px 6vw 36px;min-height:0}.auth-shell .auth-copy h1{margin:40px 0 14px;font-size:44px}.auth-unidades{margin-top:28px;gap:12px}.auth-unidades img{max-width:calc(50% - 6px);padding:12px}}
+/* auditoria: colunas de largura fixa e toda linha da tabela com duas linhas de texto (registro + tipo; até duas alterações, ou a primeira
+   e o "+N alterações"), para a tabela não crescer conforme o tamanho do registro; o texto longo é cortado com reticências e aparece
+   inteiro no title e ao abrir a linha */
+.tabela-auditoria{table-layout:fixed;min-width:900px}.tabela-auditoria td{vertical-align:top;line-height:20px}
+.tabela-auditoria .col-quando{width:150px}.tabela-auditoria .col-quem{width:160px}.tabela-auditoria .col-acao{width:170px}.tabela-auditoria .col-registro{width:30%}
+.tabela-auditoria .auditoria-quando{white-space:nowrap}.auditoria-quem{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auditoria-registro{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}.auditoria-registro small{font-size:11px;line-height:20px}
+.auditoria-descricao,.link-registro{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link-registro{background:none;padding:0;color:#247078;font-weight:700;text-align:left;text-decoration:underline;text-underline-offset:2px}
+.de-para{list-style:none;margin:0;padding:0;display:grid;gap:4px}.de-para li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:20px}.de-para-aberto li{white-space:normal;overflow-wrap:anywhere}
+.de-para-campo{color:#82939a;font-weight:600}.de-para-de{color:#9aa9b0}.de-para-para{color:#18324a}.de-para .icone{width:13px;height:13px;margin:0 4px;color:#9aa9b0;vertical-align:-2px}
+.de-para-mais{display:block;padding:0;margin-top:4px;font-size:12px;line-height:20px}

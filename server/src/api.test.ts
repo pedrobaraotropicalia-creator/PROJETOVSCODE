@@ -332,3 +332,60 @@ describe('nomes de unidade', () => {
     expect((await api('POST', `/unidades/${antiga}/reativar`)).corpo.erro).toMatch(/ativa Loja Velha/);
   });
 });
+
+describe('auditoria', () => {
+  type Registro = { usuario_nome: string; entidade: string; entidade_id: number; acao: string; descricao: string; alteracoes: { campo: string; de: string | null; para: string | null }[] };
+  const ultimas = async () => (await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`)).corpo as Registro[];
+  const brl = (valor: number) => valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  it('registra quem fez, o registro e o de/para do que mudou; salvar sem mudar nada não registra', async () => {
+    const id = (await api('POST', '/unidades', { nome: 'AUDITADA' })).corpo.id;
+    expect((await ultimas())[0]).toMatchObject({ entidade: 'unidade', entidade_id: id, acao: 'Criou', usuario_nome: 'Dono', descricao: 'Unidade AUDITADA' });
+    await api('PATCH', `/unidades/${id}`, { nome: 'AUDITADA NOVA', tolerancia_dinheiro: 2.5 });
+    expect((await ultimas())[0]).toMatchObject({ acao: 'Alterou', descricao: 'Unidade AUDITADA NOVA', alteracoes: [{ campo: 'Nome', de: 'AUDITADA', para: 'AUDITADA NOVA' }, { campo: 'Tolerância de quebra', de: brl(0), para: brl(2.5) }] });
+    const total = (await ultimas()).length;
+    await api('PATCH', `/unidades/${id}`, { tolerancia_dinheiro: 2.5 });
+    expect((await ultimas()).length).toBe(total);
+  });
+
+  it('acompanha o caixa da abertura à conferência', async () => {
+    const id = await caixa(unidades[0].id, 50, 60);
+    await api('POST', `/fechamentos/${id}/conferir`, { problema_resolvido: true });
+    const doCaixa = (await ultimas()).filter((item) => item.entidade === 'caixa' && item.entidade_id === id).reverse();
+    expect(doCaixa.map((item) => item.acao)).toEqual(['Abriu', 'Alterou', 'Finalizou', 'Conferiu']);
+    expect(doCaixa[1].alteracoes).toContainEqual({ campo: 'Dinheiro contado', de: brl(0), para: brl(60) });
+    expect(doCaixa[3].alteracoes).toEqual([{ campo: 'Status', de: 'Finalizado', para: 'Conferido' }, { campo: 'Conferência', de: null, para: 'Certo' }]);
+  });
+
+  it('código novo e senha redefinida aparecem sem o valor', async () => {
+    const { corpo } = await api('POST', '/usuarios', { nome: 'Auditado', email: 'auditado@cofre.test', tipo: 'funcionario', unidades: [] });
+    await api('POST', `/usuarios/${corpo.usuario.id}/codigo-acesso`);
+    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { senha });
+    const doUsuario = (await ultimas()).filter((item) => item.entidade === 'usuario' && item.entidade_id === corpo.usuario.id).reverse();
+    expect(doUsuario.map((item) => item.acao)).toEqual(['Criou', 'Gerou código de acesso', 'Alterou']);
+    expect(doUsuario[2].alteracoes).toEqual([{ campo: 'Acesso', de: 'Aguardando primeiro acesso', para: 'Com senha' }, { campo: 'Senha', de: null, para: 'redefinida pelo dono' }]);
+    expect(JSON.stringify(doUsuario)).not.toContain(senha);
+    expect(JSON.stringify(doUsuario)).not.toContain(corpo.codigo);
+  });
+
+  it('colaborador não consulta, e o cadastro próprio fica no nome de quem se cadastrou', async () => {
+    const { corpo } = await api('POST', '/auth/register', { nome: 'Curioso', email: 'curioso@cofre.test', senha, confirmacao: senha });
+    const token = (await api('POST', '/auth/login', { email: 'curioso@cofre.test', senha })).corpo.token;
+    expect((await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`, undefined, token)).status).toBe(403);
+    expect((await ultimas()).find((item) => item.entidade === 'usuario' && item.entidade_id === corpo.usuario.id)).toMatchObject({ acao: 'Cadastrou-se', usuario_nome: 'Curioso' });
+  });
+
+  it('o admin vê o que já enxerga: só as unidades vinculadas, sem o cofre', async () => {
+    const [minha, outra] = [unidades[0].id, unidades[1].id];
+    const { corpo } = await api('POST', '/auth/register', { nome: 'Supervisora', email: 'supervisora@cofre.test', senha, confirmacao: senha });
+    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { tipo: 'admin', unidades: [minha] });
+    const tokenAdmin = (await api('POST', '/auth/login', { email: 'supervisora@cofre.test', senha })).corpo.token;
+    const [daMinha, daOutra] = [await caixa(minha, 10, 10), await caixa(outra, 10, 10)];
+    await api('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', valor: 5, data: hoje });
+    const visto = (await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`, undefined, tokenAdmin)).corpo as Registro[];
+    expect(visto.some((item) => item.entidade === 'caixa' && item.entidade_id === daMinha)).toBe(true);
+    expect(visto.some((item) => item.entidade === 'caixa' && item.entidade_id === daOutra)).toBe(false);
+    expect(visto.some((item) => item.entidade === 'cofre')).toBe(false);
+    expect(visto.some((item) => item.entidade === 'usuario' && item.entidade_id === corpo.usuario.id)).toBe(true);
+  });
+});

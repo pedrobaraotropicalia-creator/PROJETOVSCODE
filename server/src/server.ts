@@ -9,6 +9,7 @@ import { z, ZodError } from 'zod';
 import { db, recalcularDiferencas } from './db';
 import { limites } from './limites';
 import { cargoRestringe, nomesCargos } from './cargos';
+import { fotoCaixa, fotoMaquininha, fotoMotivo, fotoMovimentacao, fotoUnidade, fotoUsuario, registrar } from './auditoria';
 
 const app = express();
 app.use(cors());
@@ -110,7 +111,7 @@ const unidadeAtiva = (id: number) => !!db.prepare('SELECT id FROM unidades WHERE
 app.get('/api/health', (_, res) => res.json({ ok: true }));
 app.post('/api/auth/register', async (req, res) => {
   const { nome, email: normalized, senha } = cadastroSchema.parse(req.body ?? {});
-  try { const hash = await bcrypt.hash(senha, 10); const tipo = normalized === adminEmail ? 'dono' : 'funcionario'; const result = db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run(nome, normalized, hash, tipo); const row = db.prepare('SELECT * FROM usuarios WHERE id=?').get(result.lastInsertRowid); res.status(201).json({ usuario: publicUser(row) }); } catch { res.status(409).json({ erro: 'Este e-mail já está cadastrado.' }); }
+  try { const hash = await bcrypt.hash(senha, 10); const tipo = normalized === adminEmail ? 'dono' : 'funcionario'; const result = db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run(nome, normalized, hash, tipo); const novoId = Number(result.lastInsertRowid); registrar(novoId, 'usuario', novoId, 'Cadastrou-se', null, fotoUsuario(novoId)); const row = db.prepare('SELECT * FROM usuarios WHERE id=?').get(result.lastInsertRowid); res.status(201).json({ usuario: publicUser(row) }); } catch { res.status(409).json({ erro: 'Este e-mail já está cadastrado.' }); }
 });
 app.post('/api/auth/login', async (req, res) => { const email = String(req.body?.email || '').trim().toLowerCase(); const row: any = db.prepare('SELECT * FROM usuarios WHERE email=? AND ativo=1').get(email); if (row?.codigo_acesso) return res.status(403).json({ erro: 'Você ainda não criou sua senha. Use o código de primeiro acesso que recebeu.' }); if (!row ||!(await bcrypt.compare(String(req.body?.senha || ''), row.senha_hash))) return res.status(401).json({ erro: 'E-mail ou senha inválidos.' }); const usuario = publicUser(row); const token = jwt.sign({ sub: usuario.id }, secret, { expiresIn: '8h' }); res.json({ token, usuario }); });
 // usuário cadastrado pelo dono cria a senha com o código e já entra; o código deixa de valer
@@ -119,7 +120,9 @@ app.post('/api/auth/primeiro-acesso', async (req, res) => {
   const row: any = db.prepare('SELECT * FROM usuarios WHERE email=? AND ativo=1 AND codigo_acesso IS NOT NULL').get(email);
   if (!row || !timingSafeEqual(Buffer.from(row.codigo_acesso, 'hex'), Buffer.from(hashCodigo(codigo), 'hex'))) return res.status(401).json({ erro: 'E-mail ou código de acesso inválidos.' });
   const hash = await bcrypt.hash(senha, 10);
+  const antes = fotoUsuario(row.id);
   if (!db.prepare('UPDATE usuarios SET senha_hash=?, codigo_acesso=NULL WHERE id=? AND codigo_acesso=?').run(hash, row.id, row.codigo_acesso).changes) return res.status(401).json({ erro: 'E-mail ou código de acesso inválidos.' });
+  registrar(row.id, 'usuario', row.id, 'Criou a senha', antes, fotoUsuario(row.id));
   const usuario = publicUser(row);
   res.json({ token: jwt.sign({ sub: usuario.id }, secret, { expiresIn: '8h' }), usuario });
 });
@@ -131,18 +134,18 @@ const unidadesComMesmoNome = (nome: string, ignorarId?: number) => { const chave
 const conflitoDeNomeUnidade = (nome: string, ignorarId?: number) => { const iguais = unidadesComMesmoNome(nome, ignorarId); const ativa = iguais.find((unidade) => unidade.ativo); if (ativa) return `Já existe a unidade ${ativa.nome}.`; return iguais.length ? `Já existe a unidade excluída ${iguais[0].nome}. Reative-a em Unidades excluídas.` : null; };
 // cadastro no mesmo formulário da edição: além do nome, já vêm o troco e as regras de fechamento (sem eles, valem os padrões da tabela)
 const novaUnidadeSchema = unidadeSchema.extend({ nome: nomeUnidadeSchema });
-app.post('/api/unidades', auth, allow('dono'), (req, res) => { const { nome, troco_continua = false, tolerancia_dinheiro = 0, fechamento_cego = true } = novaUnidadeSchema.parse(req.body ?? {}); const conflito = conflitoDeNomeUnidade(nome); if (conflito) return res.status(409).json({ erro: conflito }); try { const result = db.prepare('INSERT INTO unidades (nome, troco_continua, tolerancia_dinheiro, fechamento_cego) VALUES (?,?,?,?)').run(nome, troco_continua ? 1 : 0, tolerancia_dinheiro, fechamento_cego ? 1 : 0); res.status(201).json(db.prepare('SELECT * FROM unidades WHERE id=?').get(result.lastInsertRowid)); } catch { res.status(409).json({ erro: 'Esta unidade já existe.' }); } });
-app.patch('/api/unidades/:id', auth, allow('dono'), (req, res) => { const { nome, troco_continua, tolerancia_dinheiro, fechamento_cego } = unidadeSchema.parse(req.body); const conflito = nome === undefined ? null : conflitoDeNomeUnidade(nome, Number(req.params.id)); if (conflito) return res.status(409).json({ erro: conflito }); const updates: string[] = []; const params: unknown[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nome); } if (troco_continua !== undefined) { updates.push('troco_continua=?'); params.push(troco_continua ? 1 : 0); } if (tolerancia_dinheiro !== undefined) { updates.push('tolerancia_dinheiro=?'); params.push(tolerancia_dinheiro); } if (fechamento_cego !== undefined) { updates.push('fechamento_cego=?'); params.push(fechamento_cego ? 1 : 0); } if (!updates.length) return res.status(400).json({ erro: 'Nada para atualizar.' }); try { const result = db.prepare(`UPDATE unidades SET ${updates.join(', ')} WHERE id=? AND ativo=1`).run(...params, req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); } catch { res.status(409).json({ erro: 'Já existe uma unidade com este nome.' }); } });
+app.post('/api/unidades', auth, allow('dono'), (req: RequestWithUser, res) => { const { nome, troco_continua = false, tolerancia_dinheiro = 0, fechamento_cego = true } = novaUnidadeSchema.parse(req.body ?? {}); const conflito = conflitoDeNomeUnidade(nome); if (conflito) return res.status(409).json({ erro: conflito }); try { const result = db.prepare('INSERT INTO unidades (nome, troco_continua, tolerancia_dinheiro, fechamento_cego) VALUES (?,?,?,?)').run(nome, troco_continua ? 1 : 0, tolerancia_dinheiro, fechamento_cego ? 1 : 0); const id = Number(result.lastInsertRowid); registrar(req.user!.id, 'unidade', id, 'Criou', null, fotoUnidade(id)); res.status(201).json(db.prepare('SELECT * FROM unidades WHERE id=?').get(id)); } catch { res.status(409).json({ erro: 'Esta unidade já existe.' }); } });
+app.patch('/api/unidades/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const { nome, troco_continua, tolerancia_dinheiro, fechamento_cego } = unidadeSchema.parse(req.body); const conflito = nome === undefined ? null : conflitoDeNomeUnidade(nome, Number(req.params.id)); if (conflito) return res.status(409).json({ erro: conflito }); const updates: string[] = []; const params: unknown[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nome); } if (troco_continua !== undefined) { updates.push('troco_continua=?'); params.push(troco_continua ? 1 : 0); } if (tolerancia_dinheiro !== undefined) { updates.push('tolerancia_dinheiro=?'); params.push(tolerancia_dinheiro); } if (fechamento_cego !== undefined) { updates.push('fechamento_cego=?'); params.push(fechamento_cego ? 1 : 0); } if (!updates.length) return res.status(400).json({ erro: 'Nada para atualizar.' }); const antes = fotoUnidade(Number(req.params.id)); try { const result = db.prepare(`UPDATE unidades SET ${updates.join(', ')} WHERE id=? AND ativo=1`).run(...params, req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); registrar(req.user!.id, 'unidade', Number(req.params.id), 'Alterou', antes, fotoUnidade(Number(req.params.id))); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); } catch { res.status(409).json({ erro: 'Já existe uma unidade com este nome.' }); } });
 // as legadas UNIDADE N ficam de fora: o boot as desativa de novo (db.ts)
 app.get('/api/unidades/excluidas', auth, allow('dono'), (_, res) => res.json(db.prepare("SELECT * FROM unidades WHERE ativo=0 AND nome NOT GLOB 'UNIDADE [0-9]*' ORDER BY nome").all()));
-app.post('/api/unidades/:id/reativar', auth, allow('dono'), (req, res) => { const alvo = db.prepare('SELECT id, nome FROM unidades WHERE id=? AND ativo=0').get(req.params.id) as { id: number; nome: string } | undefined; const ativa = alvo && unidadesComMesmoNome(alvo.nome, alvo.id).find((unidade) => unidade.ativo); if (ativa) return res.status(409).json({ erro: `Já existe a unidade ativa ${ativa.nome}. Renomeie-a antes de reativar esta.` }); const result = db.prepare("UPDATE unidades SET ativo=1 WHERE id=? AND ativo=0 AND nome NOT GLOB 'UNIDADE [0-9]*'").run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade excluída não encontrada.' }); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); });
-app.delete('/api/unidades/:id', auth, allow('dono'), (req, res) => { const result = db.prepare('UPDATE unidades SET ativo=0 WHERE id=? AND ativo=1').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); res.status(204).end(); });
+app.post('/api/unidades/:id/reativar', auth, allow('dono'), (req: RequestWithUser, res) => { const alvo = db.prepare('SELECT id, nome FROM unidades WHERE id=? AND ativo=0').get(req.params.id) as { id: number; nome: string } | undefined; const ativa = alvo && unidadesComMesmoNome(alvo.nome, alvo.id).find((unidade) => unidade.ativo); if (ativa) return res.status(409).json({ erro: `Já existe a unidade ativa ${ativa.nome}. Renomeie-a antes de reativar esta.` }); const antes = fotoUnidade(Number(req.params.id)); const result = db.prepare("UPDATE unidades SET ativo=1 WHERE id=? AND ativo=0 AND nome NOT GLOB 'UNIDADE [0-9]*'").run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade excluída não encontrada.' }); registrar(req.user!.id, 'unidade', Number(req.params.id), 'Reativou', antes, fotoUnidade(Number(req.params.id))); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); });
+app.delete('/api/unidades/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const antes = fotoUnidade(Number(req.params.id)); const result = db.prepare('UPDATE unidades SET ativo=0 WHERE id=? AND ativo=1').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); registrar(req.user!.id, 'unidade', Number(req.params.id), 'Excluiu', antes, fotoUnidade(Number(req.params.id))); res.status(204).end(); });
 app.get('/api/unidades/:id/maquininhas', auth, (req: RequestWithUser, res) => !acessaUnidade(req.user!, Number(req.params.id)) ? res.status(403).json(semAcessoUnidade) : res.json(db.prepare('SELECT * FROM maquininhas WHERE unidade_id=? AND ativo=1 ORDER BY numero').all(req.params.id)));
 app.get('/api/maquininhas', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => res.json((db.prepare('SELECT m.*, u.nome unidade_nome FROM maquininhas m JOIN unidades u ON u.id=m.unidade_id WHERE m.ativo=1 ORDER BY u.nome, m.numero').all() as { unidade_id: number }[]).filter((row) => acessaUnidade(req.user!, row.unidade_id))));
-app.post('/api/unidades/:id/maquininhas', auth, (req: RequestWithUser, res) => { if (!unidadeAtiva(Number(req.params.id))) return res.status(404).json({ erro: 'Unidade não encontrada.' }); if (!acessaUnidade(req.user!, Number(req.params.id))) return res.status(403).json(semAcessoUnidade); const { nome, numero, numero_serie } = maquininhaSchema.parse(req.body ?? {}); try { const result = db.prepare('INSERT INTO maquininhas (unidade_id,nome,numero,numero_serie) VALUES (?,?,?,?)').run(req.params.id, nome, numero, numero_serie); res.status(201).json(db.prepare('SELECT * FROM maquininhas WHERE id=?').get(result.lastInsertRowid)); } catch { res.status(409).json({ erro: 'Número de série já cadastrado nesta unidade.' }); } });
-app.delete('/api/maquininhas/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const maquininha = db.prepare('SELECT unidade_id FROM maquininhas WHERE id=? AND ativo=1').get(req.params.id) as { unidade_id: number } | undefined; if (!maquininha) return res.status(404).json({ erro: 'Maquininha não encontrada.' }); if (!acessaUnidade(req.user!, maquininha.unidade_id)) return res.status(403).json(semAcessoUnidade); db.prepare('UPDATE maquininhas SET ativo=0 WHERE id=?').run(req.params.id); res.status(204).end(); });
+app.post('/api/unidades/:id/maquininhas', auth, (req: RequestWithUser, res) => { if (!unidadeAtiva(Number(req.params.id))) return res.status(404).json({ erro: 'Unidade não encontrada.' }); if (!acessaUnidade(req.user!, Number(req.params.id))) return res.status(403).json(semAcessoUnidade); const { nome, numero, numero_serie } = maquininhaSchema.parse(req.body ?? {}); try { const result = db.prepare('INSERT INTO maquininhas (unidade_id,nome,numero,numero_serie) VALUES (?,?,?,?)').run(req.params.id, nome, numero, numero_serie); const id = Number(result.lastInsertRowid); registrar(req.user!.id, 'maquininha', id, 'Criou', null, fotoMaquininha(id)); res.status(201).json(db.prepare('SELECT * FROM maquininhas WHERE id=?').get(id)); } catch { res.status(409).json({ erro: 'Número de série já cadastrado nesta unidade.' }); } });
+app.delete('/api/maquininhas/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const maquininha = db.prepare('SELECT unidade_id FROM maquininhas WHERE id=? AND ativo=1').get(req.params.id) as { unidade_id: number } | undefined; if (!maquininha) return res.status(404).json({ erro: 'Maquininha não encontrada.' }); if (!acessaUnidade(req.user!, maquininha.unidade_id)) return res.status(403).json(semAcessoUnidade); const antes = fotoMaquininha(Number(req.params.id)); db.prepare('UPDATE maquininhas SET ativo=0 WHERE id=?').run(req.params.id); registrar(req.user!.id, 'maquininha', Number(req.params.id), 'Excluiu', antes, fotoMaquininha(Number(req.params.id))); res.status(204).end(); });
 // edita só identificação (nome, número, série): os caixas guardam o id, então a correção aparece também nos caixas antigos; a unidade não muda, para o histórico da unidade continuar coerente
-app.patch('/api/maquininhas/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const maquininha = db.prepare('SELECT unidade_id FROM maquininhas WHERE id=? AND ativo=1').get(req.params.id) as { unidade_id: number } | undefined; if (!maquininha) return res.status(404).json({ erro: 'Maquininha não encontrada.' }); if (!acessaUnidade(req.user!, maquininha.unidade_id)) return res.status(403).json(semAcessoUnidade); const { nome, numero, numero_serie } = maquininhaSchema.parse(req.body ?? {}); try { db.prepare('UPDATE maquininhas SET nome=?, numero=?, numero_serie=? WHERE id=?').run(nome, numero, numero_serie, req.params.id); } catch { return res.status(409).json({ erro: 'Número de série já cadastrado nesta unidade.' }); } res.json(db.prepare('SELECT * FROM maquininhas WHERE id=?').get(req.params.id)); });
+app.patch('/api/maquininhas/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const maquininha = db.prepare('SELECT unidade_id FROM maquininhas WHERE id=? AND ativo=1').get(req.params.id) as { unidade_id: number } | undefined; if (!maquininha) return res.status(404).json({ erro: 'Maquininha não encontrada.' }); if (!acessaUnidade(req.user!, maquininha.unidade_id)) return res.status(403).json(semAcessoUnidade); const { nome, numero, numero_serie } = maquininhaSchema.parse(req.body ?? {}); const antes = fotoMaquininha(Number(req.params.id)); try { db.prepare('UPDATE maquininhas SET nome=?, numero=?, numero_serie=? WHERE id=?').run(nome, numero, numero_serie, req.params.id); } catch { return res.status(409).json({ erro: 'Número de série já cadastrado nesta unidade.' }); } registrar(req.user!.id, 'maquininha', Number(req.params.id), 'Alterou', antes, fotoMaquininha(Number(req.params.id))); res.json(db.prepare('SELECT * FROM maquininhas WHERE id=?').get(req.params.id)); });
 app.get('/api/fechamentos', auth, (req: RequestWithUser, res) => { const params: any[] = []; let sql = 'SELECT f.*, u.nome unidade_nome, u.tolerancia_dinheiro, u.fechamento_cego, usr.nome usuario_nome FROM fechamentos f JOIN unidades u ON u.id=f.unidade_id JOIN usuarios usr ON usr.id=f.usuario_id'; const where: string[] = []; if (req.user!.tipo !== 'dono') { where.push('f.unidade_id IN (SELECT unidade_id FROM usuario_unidades WHERE usuario_id=?)'); params.push(req.user!.id); } if (req.user!.tipo === 'funcionario' || isCaixaOnly(req.user)) { where.push('f.usuario_id=?'); params.push(req.user!.id); } if (where.length) sql += ` WHERE ${where.join(' AND ')}`; sql += ' ORDER BY f.data_caixa DESC, f.turno DESC, f.criado_em DESC'; res.json((db.prepare(sql).all(...params) as (Fechamento & { fechamento_cego: number })[]).map((row) => ocultarDiferencas(req.user!, { ...row, pode_editar: podeEditar(req.user!, row) }))); });
 // uma linha por caixa já finalizado alguma vez (mesmo critério de dia do faturamento); o client agrega os gráficos
 // dinheiro_anterior: dinheiro contado no caixa anterior da mesma unidade, calculado antes do filtro de período
@@ -173,10 +176,12 @@ app.post('/api/fechamentos', auth, (req: RequestWithUser, res) => {
     salvarTotal(novoId, 'saldo_inicial', salvarContagens(novoId, 'abertura', contagens));
     return novoId;
   })();
+  registrar(req.user!.id, 'caixa', id, 'Abriu', null, fotoCaixa(id));
   res.status(201).json({ id, mensagem: 'Caixa aberto.' });
 });
 app.put('/api/fechamentos/:id/abertura', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
+  const antes = fotoCaixa(fechamento.id);
   const { data_caixa, unidade_id, turno, contagens } = aberturaSchema.parse(req.body);
   if (!unidadeAtiva(unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
   if (!acessaUnidade(req.user!, unidade_id)) return res.status(403).json(semAcessoUnidade);
@@ -188,10 +193,12 @@ app.put('/api/fechamentos/:id/abertura', auth, (req: RequestWithUser, res) => {
     if (unidade_id !== fechamento.unidade_id) { db.prepare('DELETE FROM detalhes_maquininha WHERE fechamento_id=?').run(fechamento.id); salvarTotal(fechamento.id, 'total_maquininhas', 0); }
     salvarTotal(fechamento.id, 'saldo_inicial', salvarContagens(fechamento.id, 'abertura', contagens));
   })();
+  registrar(req.user!.id, 'caixa', fechamento.id, 'Alterou', antes, fotoCaixa(fechamento.id));
   res.json({ mensagem: 'Abertura salva.' });
 });
 app.put('/api/fechamentos/:id/entradas', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
+  const antes = fotoCaixa(fechamento.id);
   const { entradas } = entradasSchema.parse(req.body);
   db.transaction(() => {
     db.prepare('DELETE FROM entradas WHERE fechamento_id=?').run(fechamento.id);
@@ -199,10 +206,12 @@ app.put('/api/fechamentos/:id/entradas', auth, (req: RequestWithUser, res) => {
     Object.entries(entradas).forEach(([forma, valor]) => insert.run(fechamento.id, forma, valor));
     salvarTotal(fechamento.id, 'total_entradas', Object.values(entradas).reduce((sum: number, valor) => sum + (valor || 0), 0));
   })();
+  registrar(req.user!.id, 'caixa', fechamento.id, 'Alterou', antes, fotoCaixa(fechamento.id));
   res.json({ mensagem: 'Entradas salvas.' });
 });
 app.put('/api/fechamentos/:id/maquininhas', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
+  const antes = fotoCaixa(fechamento.id);
   const { maquininhas } = maquininhasSchema.parse(req.body);
   const validas = new Set((db.prepare('SELECT id FROM maquininhas WHERE unidade_id=? AND ativo=1').all(fechamento.unidade_id) as { id: number }[]).map((item) => item.id));
   if (maquininhas.some((item) => !validas.has(item.maquininha_id))) return res.status(400).json({ erro: 'Maquininha não pertence à unidade deste caixa.' });
@@ -212,10 +221,12 @@ app.put('/api/fechamentos/:id/maquininhas', auth, (req: RequestWithUser, res) =>
     maquininhas.forEach((item) => insert.run(fechamento.id, item.maquininha_id, item.valor));
     salvarTotal(fechamento.id, 'total_maquininhas', maquininhas.reduce((sum, item) => sum + item.valor, 0));
   })();
+  registrar(req.user!.id, 'caixa', fechamento.id, 'Alterou', antes, fotoCaixa(fechamento.id));
   res.json({ mensagem: 'Maquininhas salvas.' });
 });
 app.put('/api/fechamentos/:id/saidas', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
+  const antes = fotoCaixa(fechamento.id);
   const { saidas } = saidasSchema.parse(req.body);
   // aceita motivo já excluído: um caixa reaberto mantém o motivo que tinha
   const existe = db.prepare('SELECT id FROM motivos_saida WHERE id=?');
@@ -226,23 +237,28 @@ app.put('/api/fechamentos/:id/saidas', auth, (req: RequestWithUser, res) => {
     saidas.forEach((item) => insert.run(fechamento.id, item.valor, item.motivo_id, item.observacao));
     salvarTotal(fechamento.id, 'total_saidas', saidas.reduce((sum, item) => sum + item.valor, 0));
   })();
+  registrar(req.user!.id, 'caixa', fechamento.id, 'Alterou', antes, fotoCaixa(fechamento.id));
   res.json({ mensagem: 'Saídas salvas.' });
 });
 app.put('/api/fechamentos/:id/contagem-final', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
+  const antes = fotoCaixa(fechamento.id);
   const { contagens } = contagemFinalSchema.parse(req.body);
   db.transaction(() => salvarTotal(fechamento.id, 'dinheiro_fisico', salvarContagens(fechamento.id, 'fechamento', contagens)))();
+  registrar(req.user!.id, 'caixa', fechamento.id, 'Alterou', antes, fotoCaixa(fechamento.id));
   res.json({ mensagem: 'Contagem final salva.' });
 });
 // mantém a data da primeira finalização para o caixa reaberto não mudar de dia no faturamento
 app.post('/api/fechamentos/:id/finalizar', auth, (req: RequestWithUser, res) => {
   const fechamento = carregarEditavel(req, res); if (!fechamento) return;
+  const antes = fotoCaixa(fechamento.id);
   db.prepare("UPDATE fechamentos SET status='finalizado', atualizado_em=CURRENT_TIMESTAMP, movimenta_cofre=CASE WHEN finalizado_em IS NULL THEN 1 ELSE movimenta_cofre END, finalizado_em=COALESCE(finalizado_em, CURRENT_TIMESTAMP), troco_continua=COALESCE(troco_continua, (SELECT troco_continua FROM unidades WHERE id=fechamentos.unidade_id)) WHERE id=?").run(fechamento.id);
+  registrar(req.user!.id, 'caixa', fechamento.id, 'Finalizou', antes, fotoCaixa(fechamento.id));
   res.json({ mensagem: 'CAIXA FINALIZADO' });
 });
-app.post('/api/fechamentos/:id/conferir', auth, allow('dono'), (req, res) => { const fechamento = db.prepare('SELECT status FROM fechamentos WHERE id=?').get(req.params.id) as { status: string } | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (fechamento.status === 'aberto') return res.status(409).json({ erro: 'Finalize o caixa antes de conferir.' }); const resolved = req.body?.problema_resolvido === true ? 1 : req.body?.problema_resolvido === false ? 0 : null; const unmark = req.body?.desmarcar === true; db.prepare("UPDATE fechamentos SET status=?, problema_resolvido=?, conferido_por=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(unmark ? 'finalizado' : 'conferido', unmark ? null : resolved, unmark ? null : (req as RequestWithUser).user!.id, req.params.id); res.json({ mensagem: unmark ? 'Conferência desmarcada.' : 'Caixa conferido com sucesso.' }); });
-app.post('/api/fechamentos/:id/reabrir', auth, (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT usuario_id,status FROM fechamentos WHERE id=?').get(req.params.id) as Fechamento | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (!podeEditar(req.user!, fechamento)) return res.status(403).json({ erro: 'Você só pode editar seus próprios caixas.' }); if (req.user?.tipo === 'funcionario' && fechamento.status === 'conferido') return res.status(403).json({ erro: 'Este caixa já foi conferido pelo dono e não pode mais ser editado.' }); db.prepare("UPDATE fechamentos SET status='aberto', problema_resolvido=NULL, conferido_por=NULL, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id); res.json({ mensagem: 'Caixa reaberto para edição.' }); });
-app.delete('/api/fechamentos/:id', auth, allow('dono'), (req, res) => { const result = db.prepare('DELETE FROM fechamentos WHERE id=?').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); res.json({ mensagem: 'Caixa excluído com sucesso.' }); });
+app.post('/api/fechamentos/:id/conferir', auth, allow('dono'), (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT status FROM fechamentos WHERE id=?').get(req.params.id) as { status: string } | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (fechamento.status === 'aberto') return res.status(409).json({ erro: 'Finalize o caixa antes de conferir.' }); const resolved = req.body?.problema_resolvido === true ? 1 : req.body?.problema_resolvido === false ? 0 : null; const unmark = req.body?.desmarcar === true; const antes = fotoCaixa(Number(req.params.id)); db.prepare("UPDATE fechamentos SET status=?, problema_resolvido=?, conferido_por=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(unmark ? 'finalizado' : 'conferido', unmark ? null : resolved, unmark ? null : req.user!.id, req.params.id); registrar(req.user!.id, 'caixa', Number(req.params.id), unmark ? 'Desfez a conferência' : 'Conferiu', antes, fotoCaixa(Number(req.params.id))); res.json({ mensagem: unmark ? 'Conferência desmarcada.' : 'Caixa conferido com sucesso.' }); });
+app.post('/api/fechamentos/:id/reabrir', auth, (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT usuario_id,status FROM fechamentos WHERE id=?').get(req.params.id) as Fechamento | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (!podeEditar(req.user!, fechamento)) return res.status(403).json({ erro: 'Você só pode editar seus próprios caixas.' }); if (req.user?.tipo === 'funcionario' && fechamento.status === 'conferido') return res.status(403).json({ erro: 'Este caixa já foi conferido pelo dono e não pode mais ser editado.' }); const antes = fotoCaixa(Number(req.params.id)); db.prepare("UPDATE fechamentos SET status='aberto', problema_resolvido=NULL, conferido_por=NULL, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id); registrar(req.user!.id, 'caixa', Number(req.params.id), 'Reabriu', antes, fotoCaixa(Number(req.params.id))); res.json({ mensagem: 'Caixa reaberto para edição.' }); });
+app.delete('/api/fechamentos/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const antes = fotoCaixa(Number(req.params.id)); const result = db.prepare('DELETE FROM fechamentos WHERE id=?').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); registrar(req.user!.id, 'caixa', Number(req.params.id), 'Excluiu', antes, null); res.json({ mensagem: 'Caixa excluído com sucesso.' }); });
 // Cofre (só o dono). Total = soma do extrato; o fundo na gaveta é o saldo inicial dos caixas abertos que vão movimentar o cofre ao finalizar
 app.get('/api/cofre', auth, allow('dono'), (_, res) => res.json(db.prepare(`SELECT u.id unidade_id, u.nome,
     ROUND(COALESCE((SELECT SUM(e.valor) FROM cofre_extrato e WHERE e.unidade_id=u.id AND e.ativo=1), 0), 2) total,
@@ -269,7 +285,9 @@ app.post('/api/cofre/movimentacoes', auth, allow('dono'), (req: RequestWithUser,
   if (!unidadeAtiva(unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
   const sinal = sinalCofre[tipo] || (sentido === 'entrada' ? 1 : -1);
   const result = db.prepare('INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id) VALUES (?,?,?,?,?,?)').run(unidade_id, tipo, sinal * valor, data, observacao, req.user!.id);
-  res.status(201).json({ id: Number(result.lastInsertRowid), mensagem: 'Movimentação lançada.' });
+  const id = Number(result.lastInsertRowid);
+  registrar(req.user!.id, 'cofre', id, 'Criou', null, fotoMovimentacao(id));
+  res.status(201).json({ id, mensagem: 'Movimentação lançada.' });
 });
 app.post('/api/cofre/transferencias', auth, allow('dono'), (req: RequestWithUser, res) => {
   const { origem, destino, valor, data, observacao } = transferenciaCofreSchema.parse(req.body);
@@ -281,32 +299,39 @@ app.post('/api/cofre/transferencias', auth, allow('dono'), (req: RequestWithUser
     insert.run(destino, valor, data, observacao, req.user!.id, origemId);
     return origemId;
   })();
+  registrar(req.user!.id, 'cofre', id, 'Criou', null, fotoMovimentacao(id));
   res.status(201).json({ id, mensagem: 'Transferência lançada.' });
 });
 // exclusão lógica; numa transferência sai das duas unidades. Os caixas não aparecem aqui: mudam reabrindo ou excluindo o caixa
 app.delete('/api/cofre/movimentacoes/:id', auth, allow('dono'), (req: RequestWithUser, res) => {
   const mov = db.prepare('SELECT id, transferencia_id FROM cofre_movimentacoes WHERE id=? AND ativo=1').get(req.params.id) as { id: number; transferencia_id: number | null } | undefined;
   if (!mov) return res.status(404).json({ erro: 'Movimentação não encontrada.' });
-  db.prepare(`UPDATE cofre_movimentacoes SET ativo=0, excluido_por=?, excluido_em=CURRENT_TIMESTAMP WHERE ${mov.transferencia_id ? 'transferencia_id' : 'id'}=?`).run(req.user!.id, mov.transferencia_id ?? mov.id);
+  const alvo = mov.transferencia_id ?? mov.id; const antes = fotoMovimentacao(alvo);
+  db.prepare(`UPDATE cofre_movimentacoes SET ativo=0, excluido_por=?, excluido_em=CURRENT_TIMESTAMP WHERE ${mov.transferencia_id ? 'transferencia_id' : 'id'}=?`).run(req.user!.id, alvo);
+  registrar(req.user!.id, 'cofre', alvo, 'Excluiu', antes, fotoMovimentacao(alvo));
   res.json({ mensagem: 'Movimentação excluída.' });
 });
 // motivos de saída: qualquer usuário lista e cadastra (na etapa Saídas); só admin e dono renomeiam e excluem
 const nomeMotivoSchema = texto('Informe o nome do motivo.', 'O nome do motivo', limites.nomeMotivo);
 app.get('/api/motivos-saida', auth, (_, res) => res.json(db.prepare('SELECT id, nome FROM motivos_saida WHERE ativo=1 ORDER BY nome').all()));
 // nome já cadastrado devolve o existente (reativando se tinha sido excluído), para quem está no caixa só seguir com ele
-app.post('/api/motivos-saida', auth, (req, res) => {
+app.post('/api/motivos-saida', auth, (req: RequestWithUser, res) => {
   const nome = nomeMotivoSchema.parse(req.body?.nome);
   const existente = db.prepare('SELECT id FROM motivos_saida WHERE nome=?').get(nome) as { id: number } | undefined;
+  const antes = existente ? fotoMotivo(existente.id) : null;
   if (existente) db.prepare('UPDATE motivos_saida SET ativo=1 WHERE id=?').run(existente.id);
   const id = existente?.id ?? Number(db.prepare('INSERT INTO motivos_saida (nome) VALUES (?)').run(nome).lastInsertRowid);
+  registrar(req.user!.id, 'motivo', id, existente ? 'Reativou' : 'Criou', antes, fotoMotivo(id));
   res.status(existente ? 200 : 201).json(db.prepare('SELECT id, nome FROM motivos_saida WHERE id=?').get(id));
 });
-app.patch('/api/motivos-saida/:id', auth, allow('admin', 'dono'), (req, res) => {
+app.patch('/api/motivos-saida/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
   const nome = nomeMotivoSchema.parse(req.body?.nome);
+  const antes = fotoMotivo(Number(req.params.id));
   try { const result = db.prepare('UPDATE motivos_saida SET nome=? WHERE id=? AND ativo=1').run(nome, req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Motivo não encontrado.' }); } catch { return res.status(409).json({ erro: 'Já existe um motivo com este nome.' }); }
+  registrar(req.user!.id, 'motivo', Number(req.params.id), 'Alterou', antes, fotoMotivo(Number(req.params.id)));
   res.json(db.prepare('SELECT id, nome FROM motivos_saida WHERE id=?').get(req.params.id));
 });
-app.delete('/api/motivos-saida/:id', auth, allow('admin', 'dono'), (req, res) => { const result = db.prepare('UPDATE motivos_saida SET ativo=0 WHERE id=? AND ativo=1').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Motivo não encontrado.' }); res.status(204).end(); });
+app.delete('/api/motivos-saida/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const antes = fotoMotivo(Number(req.params.id)); const result = db.prepare('UPDATE motivos_saida SET ativo=0 WHERE id=? AND ativo=1').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Motivo não encontrado.' }); registrar(req.user!.id, 'motivo', Number(req.params.id), 'Excluiu', antes, fotoMotivo(Number(req.params.id))); res.status(204).end(); });
 // o que o client mostra para o usuário: diferenças (quem confere vê sempre; os demais, se alguma unidade vinculada não usa fechamento cego)
 // e o campo de data na abertura do caixa
 app.get('/api/acesso', auth, (req: RequestWithUser, res) => res.json({ ve_diferenca: conferente(req.user!) || !!db.prepare('SELECT 1 FROM unidades u JOIN usuario_unidades v ON v.unidade_id=u.id WHERE v.usuario_id=? AND u.ativo=1 AND u.fechamento_cego=0').get(req.user!.id), escolhe_data_caixa: escolheDataCaixa(req.user!) }));
@@ -319,7 +344,7 @@ const novoUsuarioSchema = z.object({ nome: nomeUsuarioSchema, email: emailSchema
 const salvarVinculos = (id: number, unidades: number[]) => { db.prepare('DELETE FROM usuario_unidades WHERE usuario_id=?').run(id); const insert = db.prepare('INSERT OR IGNORE INTO usuario_unidades (usuario_id, unidade_id) VALUES (?,?)'); unidades.forEach((unidadeId) => insert.run(id, unidadeId)); };
 app.get('/api/usuarios', auth, allow('admin', 'dono'), (_, res) => res.json((db.prepare(`SELECT ${colunasUsuario} FROM usuarios ORDER BY nome`).all() as { id: number }[]).map(comUnidades)));
 // o dono cadastra sem senha: o usuário cria a senha no primeiro acesso com o código, que só aparece aqui e ao gerar outro
-app.post('/api/usuarios', auth, allow('dono'), (req, res) => {
+app.post('/api/usuarios', auth, allow('dono'), (req: RequestWithUser, res) => {
   const { nome, email, cargo, tipo, unidades } = novoUsuarioSchema.parse(req.body ?? {});
   const existente = db.prepare('SELECT ativo FROM usuarios WHERE email=?').get(email) as { ativo: number } | undefined;
   if (existente?.ativo === 0) return res.status(409).json({ erro: 'Já existe um usuário inativo com este e-mail. Reative-o na lista de usuários, na situação Inativos.' });
@@ -330,16 +355,31 @@ app.post('/api/usuarios', auth, allow('dono'), (req, res) => {
     salvarVinculos(novoId, unidades);
     return novoId;
   })();
+  registrar(req.user!.id, 'usuario', id, 'Criou', null, fotoUsuario(id));
   res.status(201).json({ usuario: lerUsuario(id), codigo });
 });
 // inativação (exclusão lógica): o acesso cai na hora, porque o middleware auth exige ativo=1; caixas, vínculos e cargo ficam para a reativação
-app.delete('/api/usuarios/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const alvo = db.prepare('SELECT id, email FROM usuarios WHERE id=? AND ativo=1').get(req.params.id) as { id: number; email: string } | undefined; if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado.' }); if (alvo.email === adminEmail || alvo.id === req.user!.id) return res.status(409).json({ erro: 'O dono do sistema não pode ser inativado.' }); db.prepare('UPDATE usuarios SET ativo=0 WHERE id=?').run(alvo.id); res.json({ mensagem: 'Usuário inativado.' }); });
-app.post('/api/usuarios/:id/reativar', auth, allow('dono'), (req, res) => { if (!db.prepare('UPDATE usuarios SET ativo=1 WHERE id=? AND ativo=0').run(req.params.id).changes) return res.status(404).json({ erro: 'Usuário inativo não encontrado.' }); res.json({ usuario: lerUsuario(Number(req.params.id)) }); });
+app.delete('/api/usuarios/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const alvo = db.prepare('SELECT id, email FROM usuarios WHERE id=? AND ativo=1').get(req.params.id) as { id: number; email: string } | undefined; if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado.' }); if (alvo.email === adminEmail || alvo.id === req.user!.id) return res.status(409).json({ erro: 'O dono do sistema não pode ser inativado.' }); const antes = fotoUsuario(alvo.id); db.prepare('UPDATE usuarios SET ativo=0 WHERE id=?').run(alvo.id); registrar(req.user!.id, 'usuario', alvo.id, 'Inativou', antes, fotoUsuario(alvo.id)); res.json({ mensagem: 'Usuário inativado.' }); });
+app.post('/api/usuarios/:id/reativar', auth, allow('dono'), (req: RequestWithUser, res) => { const antes = fotoUsuario(Number(req.params.id)); if (!db.prepare('UPDATE usuarios SET ativo=1 WHERE id=? AND ativo=0').run(req.params.id).changes) return res.status(404).json({ erro: 'Usuário inativo não encontrado.' }); registrar(req.user!.id, 'usuario', Number(req.params.id), 'Reativou', antes, fotoUsuario(Number(req.params.id))); res.json({ usuario: lerUsuario(Number(req.params.id)) }); });
 // troca o código de quem ainda não criou a senha; o anterior deixa de valer
-app.post('/api/usuarios/:id/codigo-acesso', auth, allow('dono'), (req, res) => { const alvo = db.prepare('SELECT codigo_acesso FROM usuarios WHERE id=? AND ativo=1').get(req.params.id) as { codigo_acesso: string | null } | undefined; if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado.' }); if (!alvo.codigo_acesso) return res.status(409).json({ erro: 'Este usuário já criou a senha.' }); const { codigo, hash } = novoCodigoAcesso(); db.prepare('UPDATE usuarios SET codigo_acesso=? WHERE id=?').run(hash, req.params.id); res.json({ codigo }); });
-app.patch('/api/usuarios/:id/tipo', auth, allow('dono'), (req, res) => { const tipo = ['funcionario', 'admin'].includes(req.body?.tipo) ? req.body.tipo : null; if (!tipo) return res.status(400).json({ erro: 'Perfil inválido.' }); db.prepare('UPDATE usuarios SET tipo=? WHERE id=? AND email<>?').run(tipo, req.params.id, adminEmail); res.json({ mensagem: 'Perfil atualizado.' }); });
-app.patch('/api/usuarios/:id', auth, allow('dono'), async (req, res) => { const id = Number(req.params.id); const target: any = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id); if (!target) return res.status(404).json({ erro: 'Usuário não encontrado.' }); const isOwnerAccount = target.email === adminEmail; const { nome, email, senha, cargo, tipo, unidades } = req.body || {}; const updates: string[] = []; const params: any[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nomeUsuarioSchema.parse(nome)); } if (email !== undefined) { updates.push('email=?'); params.push(emailSchema.parse(email)); } if (senha) { updates.push('senha_hash=?', 'codigo_acesso=NULL'); params.push(await bcrypt.hash(senhaSchema.parse(senha), 10)); } // cargos fora da lista que já existiam continuam válidos para quem já os tem
-if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !nomesCargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : unidadesUsuarioSchema.parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => salvarVinculos(id, novasUnidades))(); res.json({ usuario: lerUsuario(id) }); });
+app.post('/api/usuarios/:id/codigo-acesso', auth, allow('dono'), (req: RequestWithUser, res) => { const alvo = db.prepare('SELECT codigo_acesso FROM usuarios WHERE id=? AND ativo=1').get(req.params.id) as { codigo_acesso: string | null } | undefined; if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado.' }); if (!alvo.codigo_acesso) return res.status(409).json({ erro: 'Este usuário já criou a senha.' }); const { codigo, hash } = novoCodigoAcesso(); db.prepare('UPDATE usuarios SET codigo_acesso=? WHERE id=?').run(hash, req.params.id); const foto = fotoUsuario(Number(req.params.id)); registrar(req.user!.id, 'usuario', Number(req.params.id), 'Gerou código de acesso', foto, foto, [{ campo: 'Código de primeiro acesso', de: null, para: 'novo código gerado (o anterior deixou de valer)' }]); res.json({ codigo }); });
+app.patch('/api/usuarios/:id/tipo', auth, allow('dono'), (req: RequestWithUser, res) => { const tipo = ['funcionario', 'admin'].includes(req.body?.tipo) ? req.body.tipo : null; if (!tipo) return res.status(400).json({ erro: 'Perfil inválido.' }); const antes = fotoUsuario(Number(req.params.id)); db.prepare('UPDATE usuarios SET tipo=? WHERE id=? AND email<>?').run(tipo, req.params.id, adminEmail); registrar(req.user!.id, 'usuario', Number(req.params.id), 'Alterou', antes, fotoUsuario(Number(req.params.id))); res.json({ mensagem: 'Perfil atualizado.' }); });
+app.patch('/api/usuarios/:id', auth, allow('dono'), async (req: RequestWithUser, res) => { const id = Number(req.params.id); const target: any = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id); if (!target) return res.status(404).json({ erro: 'Usuário não encontrado.' }); const antes = fotoUsuario(id); const isOwnerAccount = target.email === adminEmail; const { nome, email, senha, cargo, tipo, unidades } = req.body || {}; const updates: string[] = []; const params: any[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nomeUsuarioSchema.parse(nome)); } if (email !== undefined) { updates.push('email=?'); params.push(emailSchema.parse(email)); } if (senha) { updates.push('senha_hash=?', 'codigo_acesso=NULL'); params.push(await bcrypt.hash(senhaSchema.parse(senha), 10)); } // cargos fora da lista que já existiam continuam válidos para quem já os tem
+if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !nomesCargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : unidadesUsuarioSchema.parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => salvarVinculos(id, novasUnidades))(); registrar(req.user!.id, 'usuario', id, 'Alterou', antes, fotoUsuario(id), senha ? [{ campo: 'Senha', de: null, para: 'redefinida pelo dono' }] : []); res.json({ usuario: lerUsuario(id) }); });
+// auditoria: as alterações do período pelo dia de Brasília, mais recentes primeiro; o de/para vem pronto de auditoria.ts.
+// O dono vê tudo; o admin, o que já enxerga no sistema: sem o cofre (só do dono), caixas, maquininhas e unidades só das unidades
+// vinculadas, usuários e motivos todos; com cargo Caixa, só os caixas que ele mesmo alterou
+const auditoriaSchema = z.object({ de: dia, ate: dia }).refine((filtro) => filtro.de <= filtro.ate, 'A data inicial é depois da final.');
+app.get('/api/auditoria', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
+  const { de, ate } = auditoriaSchema.parse(req.query);
+  const where = ["date(a.criado_em, '-3 hours') BETWEEN ? AND ?"]; const params: unknown[] = [de, ate];
+  if (req.user!.tipo !== 'dono') {
+    const vinculadas = unidadesVinculadas(req.user!.id);
+    where.push(`(a.entidade IN ('usuario', 'motivo') OR (a.entidade IN ('caixa', 'maquininha', 'unidade') AND a.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})))`); params.push(...vinculadas);
+    if (isCaixaOnly(req.user)) { where.push("(a.entidade <> 'caixa' OR a.usuario_id = ?)"); params.push(req.user!.id); }
+  }
+  res.json((db.prepare(`SELECT a.id, a.criado_em, a.usuario_id, u.nome usuario_nome, a.entidade, a.entidade_id, a.acao, a.descricao, a.alteracoes FROM auditoria a JOIN usuarios u ON u.id=a.usuario_id WHERE ${where.join(' AND ')} ORDER BY a.id DESC`).all(...params) as { alteracoes: string }[]).map((linha) => ({ ...linha, alteracoes: JSON.parse(linha.alteracoes) })));
+});
 // serve o SPA compilado do client quando o build estiver disponível (deploy em container único)
 const clientDist = path.resolve(__dirname, '../../dist/client');
 app.use(express.static(clientDist));

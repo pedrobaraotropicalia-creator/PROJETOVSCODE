@@ -24,6 +24,7 @@ const permissoes: { acao: string; funcionario: Permissao; admin: Permissao; dono
   { acao: 'Ver usuários, cargos e perfis', funcionario: false, admin: 'Só consulta', dono: true },
   { acao: 'Cadastrar, editar e inativar usuários', funcionario: false, admin: false, dono: true },
   { acao: 'Conferir e excluir caixas', funcionario: false, admin: false, dono: true },
+  { acao: 'Auditoria (o que foi alterado, por quem e quando)', funcionario: false, admin: 'Das unidades vinculadas, sem o cofre', dono: true },
   { acao: 'Cofre e relatórios', funcionario: false, admin: false, dono: true },
   { acao: 'Unidades e regras de fechamento (tolerância e fechamento cego)', funcionario: false, admin: false, dono: true }
 ];
