@@ -5,20 +5,33 @@
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "tsx watch server/src/server.ts",
     "server:seed": "tsx server/src/seed.ts",
+    "server:gerar-caixas": "tsx server/src/gerarCaixas.ts",
     "client:dev": "vite --config client/vite.config.ts",
     "build": "tsc -p server/tsconfig.json && vite build --config client/vite.config.ts",
-    "start": "node server/dist/server.js"
+    "start": "node server/dist/server.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22.12"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
     "bcryptjs": "latest",
     "better-sqlite3": "latest",
     "cors": "latest",
+    "date-fns": "^4.4.0",
     "dotenv": "latest",
     "express": "latest",
     "jsonwebtoken": "latest",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "react": "latest",
+    "react-datepicker": "^9.1.0",
     "react-dom": "latest",
+    "react-number-format": "^5.4.5",
+    "react-select": "^5.10.2",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
     "zod": "latest"
   },
   "devDependencies": {
@@ -32,6 +45,7 @@
     "concurrently": "latest",
     "tsx": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "vitest": "^5.0.3"
   }
 }
