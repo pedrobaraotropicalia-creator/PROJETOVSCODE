@@ -20,7 +20,7 @@ Frontend: http://localhost:5173 (o Vite repassa `/api` para a porta da API; `WEB
 
 Variaveis obrigatorias: `JWT_SECRET` e `ADMIN_EMAIL`. O servidor nao sobe sem elas.
 
-Para preparar o usuario dono, defina `ADMIN_EMAIL` e `ADMIN_PASSWORD` (minimo de 8 caracteres) no `.env` e rode:
+O usuario dono nasce na primeira partida do servidor a partir de `ADMIN_EMAIL` e `ADMIN_PASSWORD` (minimo de 8 caracteres), so quando ainda nao existe. O cadastro pela tela de login recusa esse e-mail. Para redefinir a senha do dono para a `ADMIN_PASSWORD` do `.env`:
 
 ```bash
 npm run server:seed
@@ -36,7 +36,45 @@ npm start
 
 Use um processo como PM2, Nginx e HTTPS (Certbot). Mantenha o arquivo SQLite em um disco persistente, por exemplo `/var/lib/fechamento-caixa/caixa.db`. Nunca versione `.env` ou o arquivo `.db`.
 
-## Deploy no Google Cloud
+## Deploy no Cloud Run
+
+O `Dockerfile` da raiz gera a imagem, e cada push na `main` dispara o deploy do servico `financeiro` (projeto `financeiroapp-508921`, regiao `southamerica-east1`). O SQLite fica no disco em memoria da instancia. O [Litestream](https://litestream.io) copia cada escrita para um bucket do Cloud Storage, e na partida `deploy/iniciar.sh` restaura o banco do bucket. Sem `LITESTREAM_BUCKET`, o banco se perde quando a instancia desliga.
+
+Configuracao, uma vez, antes do primeiro deploy com o Litestream (no Cloud Shell; troque `CONTA` pela conta de servico do passo 2):
+
+1. Crie o bucket na mesma regiao, sem acesso publico:
+   ```bash
+   gcloud storage buckets create gs://financeiroapp-508921-caixa --project=financeiroapp-508921 --location=southamerica-east1 --uniform-bucket-level-access --public-access-prevention
+   ```
+2. Descubra a conta de servico do Cloud Run. Se vier vazio, e a conta padrao do Compute, `NUMERO_DO_PROJETO-compute@developer.gserviceaccount.com`:
+   ```bash
+   gcloud run services describe financeiro --project=financeiroapp-508921 --region=southamerica-east1 --format="value(spec.template.spec.serviceAccountName)"
+   ```
+   De a ela acesso aos objetos do bucket:
+   ```bash
+   gcloud storage buckets add-iam-policy-binding gs://financeiroapp-508921-caixa --member=serviceAccount:CONTA --role=roles/storage.objectAdmin
+   ```
+3. Guarde a senha inicial do dono no Secret Manager. O `read -s` pede a senha sem mostra-la nem grava-la no historico:
+   ```bash
+   gcloud services enable secretmanager.googleapis.com --project=financeiroapp-508921
+   read -s SENHA && printf '%s' "$SENHA" | gcloud secrets create financeiro-admin-password --project=financeiroapp-508921 --replication-policy=automatic --data-file=- && unset SENHA
+   gcloud secrets add-iam-policy-binding financeiro-admin-password --project=financeiroapp-508921 --member=serviceAccount:CONTA --role=roles/secretmanager.secretAccessor
+   ```
+4. Ligue o bucket e a senha no servico. O gatilho de deploy troca so a imagem, entao as duas devem continuar nas revisoes seguintes (confira na primeira):
+   ```bash
+   gcloud run services update financeiro --project=financeiroapp-508921 --region=southamerica-east1 --update-env-vars=LITESTREAM_BUCKET=financeiroapp-508921-caixa --update-secrets=ADMIN_PASSWORD=financeiro-admin-password:latest
+   ```
+5. Confira que o servico continua com no maximo 1 instancia e faca o merge na `main` fora do horario das lojas. O que estiver no banco atual do servico se perde nesse deploy, como em todo deploy ate aqui.
+6. Nos logs da primeira partida aparecem `no matching backups found` (bucket vazio), `Usuario dono criado` e `replicating to`. Depois de uns 15 minutos sem uso a instancia desliga; entre de novo e confira que os dados continuam la.
+
+Cuidados:
+
+- O Litestream exige um unico replicador: nunca mais de 1 instancia, nem dois servicos no mesmo bucket.
+- Faca deploy fora do horario das lojas: por alguns segundos a instancia antiga e a nova rodam juntas, e o que for gravado nesse intervalo se perde.
+- Cada escrita so responde depois de o Litestream confirmar o envio ao bucket (`server/src/replicacao.ts`), entao o Cloud Run continua cobrado por requisicao, sem CPU sempre alocada. O bucket custa centavos por mes.
+- O bucket guarda uma semana de copias (`deploy/litestream.yml`). Para ver o banco de um momento anterior, numa maquina com acesso ao bucket: `litestream restore -o caixa.db -timestamp 2026-10-20T15:00:00Z gs://financeiroapp-508921-caixa/caixa`.
+
+## Alternativa: VM no Compute Engine
 
 1. Crie um projeto no Google Cloud, ative faturamento e Compute Engine API.
 2. Crie uma VM Ubuntu `e2-small` e reserve IP estatico.
@@ -47,5 +85,3 @@ Use um processo como PM2, Nginx e HTTPS (Certbot). Mantenha o arquivo SQLite em 
 7. Libere somente TCP 80 e 443 no firewall.
 8. Rode `sudo certbot --nginx -d seu-dominio.com` para HTTPS.
 9. Para atualizar: `git pull`, `npm ci --ignore-scripts`, `npm run build` e `pm2 restart fechamento-caixa`.
-
-Cloud Run nao deve usar SQLite no filesystem temporario. Para Cloud Run, migre o Prisma/SQLite para PostgreSQL no Cloud SQL ou monte armazenamento persistente com uma estrategia de bloqueio adequada.

@@ -1,0 +1,2 @@
+# o script de partida roda no sh do container: com CRLF ele quebra
+*.sh text eol=lf

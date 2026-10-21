@@ -4,8 +4,13 @@ import path from 'node:path';
 
 const file = process.env.DATABASE_FILE || (process.env.K_SERVICE ? '/tmp/data/caixa.db' : './data/caixa.db');
 fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+// caminho absoluto, o mesmo do deploy/litestream.yml, com que o app pede ao Litestream o envio de cada escrita (replicacao.ts)
+export const arquivoBanco = path.resolve(file);
 export const db = new Database(file);
 db.pragma('foreign_keys = ON');
+// WAL é exigido pelo Litestream, que no Cloud Run copia o banco para o Cloud Storage (deploy/iniciar.sh). Quando ele segura a trava
+// num checkpoint, a escrita do app espera até 5 s (timeout padrão do better-sqlite3) em vez de falhar
+db.pragma('journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, email TEXT UNIQUE NOT NULL, senha_hash TEXT NOT NULL, tipo TEXT NOT NULL DEFAULT 'funcionario', ativo INTEGER NOT NULL DEFAULT 1, criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS unidades (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT UNIQUE NOT NULL, ativo INTEGER NOT NULL DEFAULT 1, criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);

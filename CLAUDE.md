@@ -12,13 +12,13 @@ Aplicação de fechamento de caixa para uma rede de restaurantes (unidades ofici
 npm install
 cp .env.example .env
 npm run dev          # API (tsx watch, PORT) + Vite (WEB_PORT, padrão 5173, com proxy /api -> PORT); os dois atendem também pelo IP da máquina na rede
-npm run server:seed  # cria/atualiza o usuário "dono" (exige ADMIN_EMAIL e ADMIN_PASSWORD)
+npm run server:seed  # redefine a senha do dono para ADMIN_PASSWORD (o server já cria o dono na partida quando ele não existe)
 npm run server:gerar-caixas -- --dias 90  # caixas fictícios para validação (refaz os gerados; --limpar só apaga)
 npm run build        # tsc do server -> server/dist; vite build -> dist/client
 npm start            # node server/dist/server.js (serve API e o SPA compilado)
 ```
 
-Testes: `npm test` (vitest). `client/src/relatorioDados.test.ts` cobre as agregações do relatório; `server/src/api.test.ts` sobe o server de verdade (porta 0, banco `:memory:`, dono de teste) e testa pela API o cofre, o dia do caixa, a reativação de unidades, o cadastro de usuários com primeiro acesso e a auditoria. O `server.ts` exporta `servidor` (o retorno de `app.listen`) para isso, e `server/tsconfig.json` exclui `*.test.ts` do build. Não há linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos. Para checar o client:
+Testes: `npm test` (vitest). `client/src/relatorioDados.test.ts` cobre as agregações do relatório; `server/src/api.test.ts` sobe o server de verdade (porta 0, banco `:memory:`, dono de teste criado na partida, um socket falso do Litestream) e testa pela API o dono, a espera pela replicação, o cofre, o dia do caixa, a reativação de unidades, o cadastro de usuários com primeiro acesso e a auditoria. O `server.ts` exporta `servidor` (o retorno de `app.listen`) para isso, e `server/tsconfig.json` exclui `*.test.ts` do build. Não há linter nem script de typecheck. `npm run build` só faz typecheck do server (`server/tsconfig.json`); o client não tem `tsconfig` e o Vite não checa tipos. Para checar o client:
 
 ```bash
 cd client && npx tsc --noEmit --ignoreConfig --jsx react-jsx --strict --skipLibCheck --module esnext --moduleResolution bundler --target es2022 --types vite/client src/*.tsx src/api.ts
@@ -26,7 +26,7 @@ cd client && npx tsc --noEmit --ignoreConfig --jsx react-jsx --strict --skipLibC
 
 Todas as dependências estão fixadas em `"latest"` no `package.json` — o `package-lock.json` é o que de fato define as versões.
 
-`JWT_SECRET` e `ADMIN_EMAIL` são obrigatórios: o server lança erro na inicialização sem eles.
+`JWT_SECRET` e `ADMIN_EMAIL` são obrigatórios: o server lança erro na inicialização sem eles. `ADMIN_PASSWORD` cria o dono na partida quando ele ainda não existe.
 
 ## Worktrees e preview (obrigatório em toda sessão)
 
@@ -36,14 +36,14 @@ Várias sessões trabalham ao mesmo tempo, cada uma na sua worktree em `.claude/
 
 Preparação (uma vez por worktree):
 1. Crie um `.env` na raiz da worktree (ignorado pelo git) com `JWT_SECRET` aleatório, `ADMIN_EMAIL=dono@caixa.test` e `ADMIN_PASSWORD` aleatória. Não repita a senha no chat: ela fica só no `.env`.
-2. `npm install` e `npm run server:seed`. O banco `./data/caixa.db` é relativo à worktree, então cada uma tem o seu.
+2. `npm install`. O dono nasce na primeira partida, a partir do `ADMIN_PASSWORD` do `.env`. O banco `./data/caixa.db` é relativo à worktree, então cada uma tem o seu.
 3. Escolha duas portas livres (confira com `ss -ltn`) e crie `.claude/launch.json` (ignorado pelo git):
    ```json
    { "version": "0.0.1", "configurations": [ { "name": "<nome-da-worktree>", "runtimeExecutable": "env", "runtimeArgs": ["PORT=<api>", "WEB_PORT=<web>", "npm", "run", "dev"], "port": <web> } ] }
    ```
    `PORT` e `WEB_PORT` passados pelo ambiente têm prioridade sobre o `.env`.
 
-A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login e navegação até a tela alterada. Para o perfil de funcionário, cadastre um usuário `@caixa.test` pela tela de login com uma senha gerada na própria sessão. No modo automático, ler a senha do dono no `.env` é bloqueado. Para testar como dono, suba uma instância à parte com banco descartável no scratchpad e credenciais de teste criadas na sessão: `env DATABASE_FILE=<scratchpad>/t.db JWT_SECRET=<teste> ADMIN_EMAIL=<teste>@caixa.test PORT=<api> WEB_PORT=<web> npm run dev`, depois `ADMIN_PASSWORD=<teste> npm run server:seed` com o mesmo `DATABASE_FILE`. As variáveis do ambiente têm prioridade sobre o `.env`. Derrube essa instância ao terminar.
+A cada entrega: `npm run build` (typecheck do server), `preview_start` com o nome da worktree, login e navegação até a tela alterada. Para o perfil de funcionário, cadastre um usuário `@caixa.test` pela tela de login com uma senha gerada na própria sessão. No modo automático, ler a senha do dono no `.env` é bloqueado. Para testar como dono, suba uma instância à parte com banco descartável no scratchpad e credenciais de teste criadas na sessão: `env DATABASE_FILE=<scratchpad>/t.db JWT_SECRET=<teste> ADMIN_EMAIL=<teste>@caixa.test ADMIN_PASSWORD=<teste> PORT=<api> WEB_PORT=<web> npm run dev`; o dono nasce na partida. As variáveis do ambiente têm prioridade sobre o `.env`. Derrube essa instância ao terminar.
 
 Teste no celular: emulador do Android Studio (SDK em `C:\Android\Sdk`), com `adb reverse tcp:<web> tcp:<web>` e o Chrome do aparelho em `http://localhost:<web>`. Pelo `10.0.2.2` a rede do emulador corta respostas grandes (`ERR_CONTENT_LENGTH_MISMATCH` no `/api/fechamentos` e nos módulos do Vite), o que não acontece num aparelho de verdade. O Chrome do aparelho é dirigido pelo protocolo de depuração (`adb forward tcp:9222 localabstract:chrome_devtools_remote`), e a tela real sai de `adb exec-out screencap -p`; no Git Bash use `MSYS_NO_PATHCONV=1` para caminhos do aparelho.
 
@@ -52,7 +52,7 @@ Teste no celular: emulador do Android Studio (SDK em `C:\Android\Sdk`), com `adb
 ### Server (`server/src/`)
 
 - `server.ts` contém **todas** as rotas em um único arquivo, com handlers escritos em uma linha cada. Não há camada de serviço/repositório: SQL direto via `better-sqlite3` (síncrono) dentro dos handlers.
-- `db.ts` abre o banco e aplica o schema com `CREATE TABLE IF NOT EXISTS` a cada boot. Migrações são `ALTER TABLE ... ADD COLUMN` dentro de `try/catch` que ignora "coluna já existe". Também garante as unidades oficiais e desativa unidades legadas `UNIDADE N`. Caminho do banco: `DATABASE_FILE`, senão `/tmp/data/caixa.db` no Cloud Run (`K_SERVICE` definido), senão `./data/caixa.db`.
+- `db.ts` abre o banco e aplica o schema com `CREATE TABLE IF NOT EXISTS` a cada boot. Migrações são `ALTER TABLE ... ADD COLUMN` dentro de `try/catch` que ignora "coluna já existe". Também garante as unidades oficiais e desativa unidades legadas `UNIDADE N`. Caminho do banco: `DATABASE_FILE` (a imagem Docker define `/tmp/data/caixa.db`), senão `/tmp/data/caixa.db` no Cloud Run (`K_SERVICE` definido), senão `./data/caixa.db`. O banco roda em WAL, que o Litestream exige (ver Deploy).
 - Exclusões de unidades, maquininhas e usuários são lógicas (`ativo=0`). O usuário é inativado e reativado pelo dono (`DELETE /usuarios/:id`, `POST /usuarios/:id/reativar`; o dono não pode ser inativado): o acesso cai na hora, porque `auth` exige `ativo=1`, e cargo, unidades e caixas ficam para a reativação. Criar usuário com o e-mail de um inativo dá 409 pedindo a reativação. Também: fechamentos são excluídos de fato (com `ON DELETE CASCADE` nos filhos). Unidades excluídas são reativadas pelo dono (`GET /unidades/excluidas`, `POST /unidades/:id/reativar`; as legadas `UNIDADE N` ficam de fora, porque o boot as desativa de novo), e criar uma unidade com o nome de uma excluída dá 409 pedindo a reativação. O nome de unidade é único sem diferenciar maiúsculas, inclusive nas letras acentuadas (`conflitoDeNomeUnidade`, `server.ts`; a comparação é em JS porque o `COLLATE NOCASE` do SQLite só cobre ASCII), no cadastro, na renomeação e na reativação.
 - Datas são gravadas em UTC (`CURRENT_TIMESTAMP`). O **dia do caixa** é a coluna `fechamentos.data_caixa` (`AAAA-MM-DD`, Brasília), escolhida na abertura; relatórios, filtros de Caixas fechados, ordem da lista, PDF e cofre usam ela. Os caixas anteriores à coluna receberam `date(criado_em, '-3 hours')`. O client formata os timestamps em `America/Sao_Paulo`.
 - Em produção o mesmo processo serve o SPA de `dist/client` (resolvido relativo a `__dirname`) com fallback para `index.html` em qualquer rota fora de `/api`.
@@ -61,6 +61,7 @@ Teste no celular: emulador do Android Studio (SDK em `C:\Android\Sdk`), com `adb
 
 - JWT (`Authorization: Bearer`, 8h), payload só com `sub`; o middleware `auth` recarrega o usuário do banco a cada requisição. No client, entrar zera o formulário de login (`entrar` em `App.tsx`): ele continua montado, e no aparelho compartilhado da loja quem viesse depois do Sair encontraria o e-mail e a senha do anterior.
 - Perfis (`tipo`): `funcionario`, `admin`, `dono`. O usuário cujo e-mail é igual a `ADMIN_EMAIL` é **sempre** tratado como `dono` por `publicUser`, independentemente do valor gravado.
+- **O dono nasce na partida** (`server.ts`, logo depois de `adminEmail`) a partir de `ADMIN_PASSWORD`, só quando ainda não existe: a senha que ele trocar depois não volta a cada partida (para redefinir, `npm run server:seed`). O cadastro próprio (`/auth/register`) recusa o e-mail do `ADMIN_EMAIL` com 403. Antes, com o banco vazio, quem se cadastrasse primeiro com esse e-mail virava dono; não volte a aceitar.
 - **Cadastro pelo dono** (`POST /usuarios`, botão "Novo usuário" em Usuários, no mesmo `UserModal` da edição): sem senha. O server gera um código de primeiro acesso (`XXXX-XXXX`; `usuarios.codigo_acesso` guarda só o hash SHA-256 e `senha_hash` fica `''`), mostrado uma única vez ao dono. O usuário cria a senha em "Primeiro acesso" no login (`POST /auth/primeiro-acesso`, que já devolve o token). Enquanto está pendente, `/auth/login` responde 403 e o client troca para Primeiro acesso; `GET /usuarios` traz `primeiro_acesso`. Na edição, o dono gera outro código (`POST /usuarios/:id/codigo-acesso`, o anterior deixa de valer); definir a senha pela edição também encerra a pendência. Não aceite primeiro acesso só com o e-mail: qualquer um que soubesse o e-mail tomaria a conta.
 - Existe uma segunda dimensão, `cargo` (texto livre). `isCaixaOnly`: usuário com cargo `Caixa` (não dono) só vê os próprios fechamentos, mesmo sendo `admin`.
 - **Vínculo com unidades** (`usuario_unidades`, várias por usuário): funcionário e admin só enxergam e operam as unidades vinculadas (`GET /unidades`, maquininhas, caixas, abertura). O dono não tem restrição e é o único que altera vínculos (`PATCH /usuarios/:id` com `unidades`). Na criação da tabela, cada usuário foi vinculado às unidades onde já tinha caixa (`db.ts`, roda uma vez só).
@@ -97,7 +98,7 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes.:
 
 - Toda rota que altera dados grava em `auditoria` (`db.ts`) quem fez, quando, o registro e o de/para dos campos que mudaram. A rota tira uma foto do registro antes e depois (`fotoCaixa`, `fotoUnidade`, `fotoUsuario`, `fotoMaquininha`, `fotoMotivo`, `fotoMovimentacao` em `auditoria.ts`: nomes de campo e valores já formatados para leitura) e chama `registrar`, que guarda só o que mudou e não grava nada quando nenhum campo mudou. **Rota nova que altera dados precisa registrar**; campo novo de um registro entra na foto dele.
 - Senha e código de acesso nunca entram na foto: a rota avisa que mudaram por `extras` ("redefinida pelo dono", "novo código gerado"), sem o valor. A transferência do cofre é uma alteração só (id da ponta de origem). O caixa entra com os totais e o detalhe das etapas (entradas por forma, cada maquininha, a lista de saídas); as cédulas, só pelos totais.
-- Cadastro próprio e primeiro acesso ficam no nome de quem se cadastrou. O `gerarCaixas.ts` grava direto no banco, então não aparece na auditoria.
+- Cadastro próprio e primeiro acesso ficam no nome de quem se cadastrou, e o dono criado na partida, no nome dele ("Criado na partida"). O `gerarCaixas.ts` grava direto no banco, então não aparece na auditoria.
 - Quem vê: o dono, tudo; o admin, o que já enxerga no sistema: nada do cofre (só do dono), caixas, maquininhas e unidades só das unidades vinculadas (`auditoria.unidade_id`, que vem da foto do registro; linhas sem unidade só o dono vê) e todos os usuários e motivos; com cargo Caixa, só os caixas que ele mesmo alterou. O filtro fica em `GET /auditoria`.
 - Tela Auditoria (`Auditoria.tsx`, menu RELATÓRIOS, `/auditoria`, dono e admin; o admin vê no grupo só a Auditoria): `GET /auditoria?de&ate` (dia de Brasília, mais recentes primeiro; abre no mês corrente), filtros de registro e de pessoa no client, contador e `Paginacao`. Colunas de largura fixa e toda linha com duas linhas de texto (registro + tipo; até duas alterações, ou a primeira e o "+N alterações" que abre o resto), com o texto longo em reticências e inteiro no `title`, para a tabela não crescer conforme o tamanho do registro. O caixa que ainda existe abre a consulta (`/caixas-fechados/:id`); conferir por ali recarrega a lista.
 
@@ -149,6 +150,10 @@ O caixa é preenchido em etapas, salvas separadamente e em momentos diferentes.:
 
 ## Deploy
 
-- `Dockerfile` multi-stage (Node 22, `npm ci --ignore-scripts`: o `better-sqlite3` usa o binário pronto de `prebuilds/`, mas o lock marca `hasInstallScript` e o `npm ci` tentaria compilar), porta 8080, voltado para Cloud Run. No Cloud Run o SQLite fica em `/tmp` e é **perdido** a cada nova instância/revisão — o README recomenda migrar para Cloud SQL ou usar VM com disco persistente.
+- `Dockerfile` multi-stage (Node 22, `npm ci --ignore-scripts`: o `better-sqlite3` usa o binário pronto de `prebuilds/`, mas o lock marca `hasInstallScript` e o `npm ci` tentaria compilar), porta 8080, voltado para Cloud Run (serviço `financeiro`, projeto `financeiroapp-508921`, `southamerica-east1`; cada push na `main` dispara o deploy).
+- **Persistência no Cloud Run com Litestream 0.5** (`deploy/`, binário copiado da imagem `litestream/litestream`). O SQLite fica em `/tmp/data/caixa.db`, no disco em memória da instância. Com `LITESTREAM_BUCKET` definido, `deploy/iniciar.sh` restaura o banco do Cloud Storage na partida e sobe o app com `litestream replicate -exec`. Sem cópia no bucket, o banco começa vazio; uma falha de restauração derruba a partida, e a revisão anterior continua atendendo. Sem a variável, o banco se perde quando a instância desliga.
+- O Litestream exige um único replicador por caminho do bucket: o serviço fica com no máximo 1 instância. Num deploy as instâncias velha e nova coexistem por alguns segundos, e o que for gravado nesse intervalo se perde, então o merge na `main` deve ser fora do horário das lojas.
+- Na cobrança por requisição o Cloud Run tira a CPU entre as requisições, e o envio em segundo plano ficaria para depois. Por isso `replicacao.ts` (middleware em toda rota que não é GET) segura a resposta da escrita até o Litestream confirmar o envio (`POST /sync` com `wait` no socket de controle, `LITESTREAM_SOCKET`), por até 5 s; sem confirmação a resposta sai assim mesmo e o erro vai para o log. Sem o socket (dev), o middleware não faz nada. Não troque por CPU sempre alocada, que custa bem mais.
+- O README tem a configuração no Google Cloud (bucket, permissão da conta de serviço, `ADMIN_PASSWORD` no Secret Manager).
 - O README descreve o deploy alternativo em VM (PM2 + Nginx + Certbot).
 - `.env` e arquivos `*.db` não devem ser versionados (ver `.gitignore`).

@@ -10,14 +10,28 @@ import { db, recalcularDiferencas } from './db';
 import { limites } from './limites';
 import { cargoRestringe, nomesCargos } from './cargos';
 import { fotoCaixa, fotoMaquininha, fotoMotivo, fotoMovimentacao, fotoUnidade, fotoUsuario, registrar } from './auditoria';
+import { aguardarReplicacao } from './replicacao';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(aguardarReplicacao);
 const port = Number(process.env.PORT || 8080);
 const requiredEnv = (name: string) => { const value = process.env[name]?.trim(); if (!value) throw new Error(`Variável de ambiente ${name} não definida.`); return value; };
 const secret = requiredEnv('JWT_SECRET');
 const adminEmail = requiredEnv('ADMIN_EMAIL').toLowerCase();
+// o dono nasce na partida a partir de ADMIN_PASSWORD, só quando ainda não existe (a senha que ele trocar depois não volta a cada partida);
+// o cadastro pela tela de login recusa o e-mail dele, senão quem chegasse primeiro a um banco vazio viraria dono
+if (!db.prepare('SELECT id FROM usuarios WHERE email=?').get(adminEmail)) {
+  const senhaDono = process.env.ADMIN_PASSWORD;
+  if (!senhaDono) console.warn(`O dono (${adminEmail}) ainda não existe: defina ADMIN_PASSWORD para criá-lo na partida.`);
+  else {
+    if (senhaDono.length < 8) throw new Error('ADMIN_PASSWORD deve ter pelo menos 8 caracteres.');
+    const id = Number(db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run('Dono do sistema', adminEmail, bcrypt.hashSync(senhaDono, 10), 'dono').lastInsertRowid);
+    registrar(id, 'usuario', id, 'Criado na partida', null, fotoUsuario(id));
+    console.log(`Usuário dono criado: ${adminEmail}`);
+  }
+}
 type User = { id: number; nome: string; email: string; tipo: 'funcionario' | 'admin' | 'dono'; cargo: string | null };
 type RequestWithUser = express.Request & { user?: User };
 const publicUser = (row: any): User => ({ id: row.id, nome: row.nome, email: row.email, tipo: row.email === adminEmail ? 'dono' : row.tipo, cargo: row.cargo || null });
@@ -111,7 +125,8 @@ const unidadeAtiva = (id: number) => !!db.prepare('SELECT id FROM unidades WHERE
 app.get('/api/health', (_, res) => res.json({ ok: true }));
 app.post('/api/auth/register', async (req, res) => {
   const { nome, email: normalized, senha } = cadastroSchema.parse(req.body ?? {});
-  try { const hash = await bcrypt.hash(senha, 10); const tipo = normalized === adminEmail ? 'dono' : 'funcionario'; const result = db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run(nome, normalized, hash, tipo); const novoId = Number(result.lastInsertRowid); registrar(novoId, 'usuario', novoId, 'Cadastrou-se', null, fotoUsuario(novoId)); const row = db.prepare('SELECT * FROM usuarios WHERE id=?').get(result.lastInsertRowid); res.status(201).json({ usuario: publicUser(row) }); } catch { res.status(409).json({ erro: 'Este e-mail já está cadastrado.' }); }
+  if (normalized === adminEmail) return res.status(403).json({ erro: 'Este e-mail é do dono do sistema, que não se cadastra por aqui.' });
+  try { const hash = await bcrypt.hash(senha, 10); const result = db.prepare('INSERT INTO usuarios (nome,email,senha_hash,tipo) VALUES (?,?,?,?)').run(nome, normalized, hash, 'funcionario'); const novoId = Number(result.lastInsertRowid); registrar(novoId, 'usuario', novoId, 'Cadastrou-se', null, fotoUsuario(novoId)); const row = db.prepare('SELECT * FROM usuarios WHERE id=?').get(result.lastInsertRowid); res.status(201).json({ usuario: publicUser(row) }); } catch { res.status(409).json({ erro: 'Este e-mail já está cadastrado.' }); }
 });
 app.post('/api/auth/login', async (req, res) => { const email = String(req.body?.email || '').trim().toLowerCase(); const row: any = db.prepare('SELECT * FROM usuarios WHERE email=? AND ativo=1').get(email); if (row?.codigo_acesso) return res.status(403).json({ erro: 'Você ainda não criou sua senha. Use o código de primeiro acesso que recebeu.' }); if (!row ||!(await bcrypt.compare(String(req.body?.senha || ''), row.senha_hash))) return res.status(401).json({ erro: 'E-mail ou senha inválidos.' }); const usuario = publicUser(row); const token = jwt.sign({ sub: usuario.id }, secret, { expiresIn: '8h' }); res.json({ token, usuario }); });
 // usuário cadastrado pelo dono cria a senha com o código e já entra; o código deixa de valer

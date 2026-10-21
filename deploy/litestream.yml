@@ -1,0 +1,21 @@
+# Litestream 0.5 (Dockerfile): copia o SQLite para o Cloud Storage a cada escrita. deploy/iniciar.sh restaura o banco do bucket
+# na partida e sobe o app com "litestream replicate -exec". Só uma instância pode replicar o mesmo caminho do bucket.
+dbs:
+  - path: ${DATABASE_FILE}
+    replica:
+      type: gs
+      bucket: ${LITESTREAM_BUCKET}
+      path: caixa
+
+# guarda uma semana de cópias para restaurar um momento anterior (litestream restore -timestamp)
+snapshot:
+  interval: 24h
+  retention: 168h
+
+# o Cloud Run dá 10 s entre o SIGTERM e o desligamento da instância: o envio final precisa caber neles
+shutdown-sync-timeout: 8s
+
+# o app pede o envio de cada escrita por este socket e espera a confirmação antes de responder (server/src/replicacao.ts)
+socket:
+  enabled: true
+  path: ${LITESTREAM_SOCKET}
