@@ -1,13 +1,25 @@
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const email = 'dono@cofre.test';
 const senha = randomBytes(12).toString('hex');
 process.env.DATABASE_FILE = ':memory:';
 process.env.JWT_SECRET = randomBytes(16).toString('hex');
 process.env.ADMIN_EMAIL = email;
+process.env.ADMIN_PASSWORD = senha;
 process.env.PORT = '0';
+// faz o papel do socket de controle do Litestream: guarda cada pedido de envio e responde depois do atraso, com o status do teste
+const litestream = { pedidos: [] as { path: string; wait: boolean }[], atraso: 0, status: 200 };
+const nomeSocket = `litestream-teste-${randomBytes(6).toString('hex')}`;
+process.env.LITESTREAM_SOCKET = process.platform === 'win32' ? `\\\\.\\pipe\\${nomeSocket}` : path.join(tmpdir(), `${nomeSocket}.sock`);
+const falsoLitestream = createServer((req, res) => {
+  let corpo = '';
+  req.on('data', (parte) => { corpo += parte; }).on('end', () => { litestream.pedidos.push(JSON.parse(corpo)); setTimeout(() => res.writeHead(litestream.status, { 'Content-Type': 'application/json' }).end('{"status":"synced"}'), litestream.atraso); });
+});
 
 let base = '';
 let token = '';
@@ -37,16 +49,51 @@ async function extrato(filtro = '') {
 }
 
 beforeAll(async () => {
+  await new Promise<void>((pronto) => falsoLitestream.listen(process.env.LITESTREAM_SOCKET, pronto));
   const { servidor } = await import('./server');
   banco = (await import('./db')).db;
   if (!servidor.listening) await new Promise((pronto) => servidor.once('listening', pronto));
   base = `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
-  fechar = () => servidor.close();
-  await api('POST', '/auth/register', { nome: 'Dono', email, senha, confirmacao: senha });
+  fechar = () => { servidor.close(); falsoLitestream.close(); };
   token = (await api('POST', '/auth/login', { email, senha })).corpo.token;
   unidades = (await api('GET', '/unidades')).corpo;
 });
 afterAll(() => fechar());
+
+describe('dono', () => {
+  it('é criado na partida com ADMIN_PASSWORD e não se cadastra pela tela de login', async () => {
+    expect(token).toBeTruthy();
+    expect((await api('GET', '/auth/me')).corpo.usuario).toMatchObject({ email, tipo: 'dono' });
+    expect((await api('POST', '/auth/register', { nome: 'Intruso', email: email.toUpperCase(), senha: 'outra-senha-1', confirmacao: 'outra-senha-1' }, '')).status).toBe(403);
+    expect((await api('POST', '/auth/login', { email, senha: 'outra-senha-1' }, '')).status).toBe(401);
+    const doDono = (await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`)).corpo.filter((item: { entidade: string; usuario_nome: string }) => item.entidade === 'usuario' && item.usuario_nome === 'Dono do sistema');
+    expect(doDono.map((item: { acao: string }) => item.acao)).toEqual(['Criado na partida']);
+  });
+});
+
+describe('replicação pelo Litestream', () => {
+  afterEach(() => { litestream.atraso = 0; litestream.status = 200; vi.restoreAllMocks(); });
+
+  it('a escrita só responde depois de o Litestream confirmar o envio, e a leitura não espera', async () => {
+    const { arquivoBanco } = await import('./db');
+    litestream.atraso = 300; litestream.pedidos = [];
+    const inicio = performance.now();
+    expect((await api('POST', '/motivos-saida', { nome: 'Replicado' })).status).toBe(201);
+    expect(performance.now() - inicio).toBeGreaterThanOrEqual(290);
+    expect(litestream.pedidos).toEqual([{ path: arquivoBanco, wait: true, timeout: 5 }]);
+    await api('GET', '/motivos-saida');
+    expect(litestream.pedidos).toHaveLength(1);
+  });
+
+  it('sem a confirmação, a escrita responde mesmo assim e fica gravada', async () => {
+    const erro = vi.spyOn(console, 'error').mockImplementation(() => {});
+    litestream.status = 500;
+    const { status, corpo } = await api('POST', '/motivos-saida', { nome: 'Sem confirmação' });
+    expect(status).toBe(201);
+    expect((await api('GET', '/motivos-saida')).corpo.map((item: { id: number }) => item.id)).toContain(corpo.id);
+    expect(erro).toHaveBeenCalledWith(expect.stringContaining('Litestream não confirmou o envio'));
+  });
+});
 
 describe('cofre', () => {
   it('recebe o dinheiro contado e perde o saldo inicial quando o caixa é finalizado', async () => {
@@ -340,7 +387,7 @@ describe('auditoria', () => {
 
   it('registra quem fez, o registro e o de/para do que mudou; salvar sem mudar nada não registra', async () => {
     const id = (await api('POST', '/unidades', { nome: 'AUDITADA' })).corpo.id;
-    expect((await ultimas())[0]).toMatchObject({ entidade: 'unidade', entidade_id: id, acao: 'Criou', usuario_nome: 'Dono', descricao: 'Unidade AUDITADA' });
+    expect((await ultimas())[0]).toMatchObject({ entidade: 'unidade', entidade_id: id, acao: 'Criou', usuario_nome: 'Dono do sistema', descricao: 'Unidade AUDITADA' });
     await api('PATCH', `/unidades/${id}`, { nome: 'AUDITADA NOVA', tolerancia_dinheiro: 2.5 });
     expect((await ultimas())[0]).toMatchObject({ acao: 'Alterou', descricao: 'Unidade AUDITADA NOVA', alteracoes: [{ campo: 'Nome', de: 'AUDITADA', para: 'AUDITADA NOVA' }, { campo: 'Tolerância de quebra', de: brl(0), para: brl(2.5) }] });
     const total = (await ultimas()).length;
