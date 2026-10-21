@@ -38,9 +38,32 @@ Use um processo como PM2, Nginx e HTTPS (Certbot). Mantenha o arquivo SQLite em 
 
 ## Deploy no Cloud Run
 
-O `Dockerfile` da raiz gera a imagem, e cada push na `main` dispara o deploy do servico `financeiro` (projeto `financeiroapp-508921`, regiao `southamerica-east1`). O SQLite fica no disco em memoria da instancia. O [Litestream](https://litestream.io) copia cada escrita para um bucket do Cloud Storage, e na partida `deploy/iniciar.sh` restaura o banco do bucket. Sem `LITESTREAM_BUCKET`, o banco se perde quando a instancia desliga.
+Cada push na `main` dispara o gatilho do Cloud Build `cloudrun-financeiro-southamerica-east1-pedrobaraotropicalia-piy` (regiao `southamerica-east1`). Ele gera a imagem com o `Dockerfile` da raiz e faz o deploy do servico `financeiro` (projeto `financeiroapp-508921`). O SQLite fica no disco em memoria da instancia. O [Litestream](https://litestream.io) copia cada escrita para um bucket do Cloud Storage, e na partida `deploy/iniciar.sh` restaura o banco do bucket. Sem `LITESTREAM_BUCKET`, o banco se perde quando a instancia desliga.
 
-Configuracao, uma vez, antes do primeiro deploy com o Litestream (no Cloud Shell; troque `CONTA` pela conta de servico do passo 2):
+### Gatilho de deploy
+
+A configuracao do build fica no proprio gatilho, em YAML inline (Cloud Build > Gatilhos > Editar > Configuracao > Abrir editor). Ela tem tres passos: `docker build` com o `Dockerfile`, `docker push` e `gcloud run services update --image`. O deploy troca so a imagem e mantem as variaveis e os secrets do servico. O passo de build:
+
+```yaml
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - '--no-cache'
+      - '--network=cloudbuild'
+      - '-t'
+      - >-
+        $_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+      - '-f'
+      - Dockerfile
+      - .
+    id: Build
+```
+
+A implantacao continua criada pela tela do Cloud Run usa Buildpacks por padrao (`pack build`). O Buildpacks ignora o `Dockerfile` e sobe o app com `npm start`, sem o Litestream: o banco volta a se perder a cada reinicio e o log da partida mostra `> start` em vez das linhas do Litestream. Se o gatilho for recriado, troque o passo de build de novo. A execucao manual (Executar > Executar gatilho, branch `main`) refaz o deploy do ultimo commit.
+
+### Configuracao no Google Cloud
+
+Feita uma vez, em 20/10/2026, antes do primeiro deploy com o Litestream (no Cloud Shell; troque `CONTA` pela conta de servico do passo 2):
 
 1. Crie o bucket na mesma regiao, sem acesso publico:
    ```bash
@@ -64,10 +87,10 @@ Configuracao, uma vez, antes do primeiro deploy com o Litestream (no Cloud Shell
    ```bash
    gcloud run services update financeiro --project=financeiroapp-508921 --region=southamerica-east1 --update-env-vars=LITESTREAM_BUCKET=financeiroapp-508921-caixa --update-secrets=ADMIN_PASSWORD=financeiro-admin-password:latest
    ```
-5. Confira que o servico continua com no maximo 1 instancia e faca o merge na `main` fora do horario das lojas. O que estiver no banco atual do servico se perde nesse deploy, como em todo deploy ate aqui.
-6. Nos logs da primeira partida aparecem `no matching backups found` (bucket vazio), `Usuario dono criado` e `replicating to`. Depois de uns 15 minutos sem uso a instancia desliga; entre de novo e confira que os dados continuam la.
+5. Confira que o gatilho monta a imagem com o `Dockerfile` (secao anterior) e que o servico continua com no maximo 1 instancia. Faca o merge na `main` fora do horario das lojas. O que estiver no banco atual do servico se perde nesse deploy, como em todo deploy ate aqui.
+6. Nos logs da primeira partida aparecem `no matching backups found` (bucket vazio), `replicating to` e `Usuario dono criado`, e o bucket ganha a pasta `caixa/ltx/`. Depois de uns 15 minutos sem uso a instancia desliga; entre de novo e confira que os dados continuam la.
 
-Cuidados:
+### Cuidados
 
 - O Litestream exige um unico replicador: nunca mais de 1 instancia, nem dois servicos no mesmo bucket.
 - Faca deploy fora do horario das lojas: por alguns segundos a instancia antiga e a nova rodam juntas, e o que for gravado nesse intervalo se perde.
