@@ -124,6 +124,20 @@ h1,h2,.unit-item strong,.detail-list span{overflow-wrap:anywhere}
 .cofre-saldos{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;margin-bottom:28px}.cofre-saldos article{background:#fff;border:1px solid #e3eaec;border-radius:3px;padding:23px}.cofre-saldos span,.cofre-saldos small{display:block;color:#70838d;font-size:13px}.cofre-saldos small.red{color:#bb5640;margin-top:6px;font-weight:600}.cofre-saldos strong{display:block;font:600 30px 'DM Sans';margin:12px 0 7px}.cofre-totais{margin-bottom:18px}.cofre-totais table{max-width:560px}.cofre-quando{display:block;font-size:11px;color:#82939a;margin-top:3px}.cofre-excluida td{opacity:.55}.cofre-excluida td:nth-child(4){text-decoration:line-through}
 .cofre-extrato .row-action{white-space:nowrap}
 @media(max-width:800px){.cofre-cabecalho{flex-wrap:wrap;gap:12px}.cofre-cabecalho .row-actions{flex-wrap:wrap}}
+/* composição do saldo por cédula, no painel lateral aberto pelo indicador da unidade */
+.cofre-saldos button.cofre-ver-cedulas{display:block;margin-top:10px;padding:0;background:none;color:#247078;font-size:12px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.cofre-composicao .abas{margin:12px 0 4px}.cofre-aba-valor{margin-left:8px;font-weight:600;font-variant-numeric:tabular-nums}
+.cofre-composicao table{margin-top:8px;font-size:13px;font-variant-numeric:tabular-nums;table-layout:fixed}.cofre-composicao thead th:first-child{width:42%}.cofre-composicao thead th:nth-child(2){width:20%}.cofre-composicao .cofre-sem-detalhe td{white-space:normal}.cofre-composicao .alert{margin-top:18px}
+.cofre-composicao th,.cofre-composicao td{padding:8px 0;border-bottom:1px solid #eef2f3;white-space:nowrap}.cofre-composicao td{color:#47606b}.cofre-composicao :is(th,td):not(:first-child){text-align:right;padding-left:12px}
+.cofre-composicao tfoot th{border-bottom:0;color:#18324a;font-size:13px;letter-spacing:0;text-transform:none}.cofre-composicao tr.red td{color:#bb5640}.cofre-composicao .cofre-sem-detalhe td{color:#82939a;font-style:italic}
+/* cédulas de uma linha do extrato, abertas pelo botão Cédulas logo abaixo dela */
+.cofre-com-cedulas td{border-bottom-color:transparent}.cofre-cedulas-linha td{background:#f7fafa;padding:12px 14px 16px}
+.cofre-cedulas .eyebrow{display:block;margin-bottom:8px}.cofre-cedulas ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.cofre-cedulas li{display:flex;flex-direction:column;gap:2px;padding:8px 10px;background:#fff;border:1px solid #e3eaec;border-radius:4px;font-variant-numeric:tabular-nums}.cofre-cedulas li span{font-size:12px;color:#70838d}.cofre-cedulas li strong{color:#18324a;font-size:14px}
+.cofre-extrato .row-action[aria-expanded=true]{background:#eef8f5;border-color:#9cc5c0}
+.cofre-lancamento .cash-count-box{margin:18px 0}.cofre-lancamento .cash-count-heading h3{border:0;margin:3px 0 4px;padding:0}
+/* no celular a linha das cédulas continua o cartão da movimentação */
+@media(max-width:800px){table.tabela-cartoes tr.cofre-com-cedulas{border-bottom:0;border-radius:6px 6px 0 0}table.tabela-cartoes tr.cofre-cedulas-linha{margin-top:-10px;padding-top:0;border-top:0;border-radius:0 0 6px 6px}table.tabela-cartoes tr.cofre-cedulas-linha td{margin-top:0;padding:10px 0 0;background:none;border-top:1px dashed #e3eaec}.cofre-cedulas ul{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .nome-editavel{background:none;border:1px dashed transparent;border-radius:3px;padding:4px 6px;margin:-4px -6px;font:inherit;font-weight:700;color:#234258;text-align:left;cursor:text}.nome-editavel:hover,.nome-editavel:focus-visible{border-color:#b9c9cf;background:#fbfcfc}.nome-editavel-campo{font-weight:700;padding:6px 8px;min-width:0;flex:0 1 320px}
 .motivo-item .row-action{margin-left:auto}
 .exit-row.saida-motivo{grid-template-columns:140px minmax(0,1fr) minmax(0,1fr)}/* no celular, valor e motivo dividem a linha e a observação vai embaixo; minmax(0,…) impede o select (opções longas) de espremer o valor */

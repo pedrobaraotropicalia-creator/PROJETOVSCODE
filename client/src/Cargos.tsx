@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Icone } from './icones';
+import PainelLateral from './PainelLateral';
 import { cargoRestringe, cargos, nomesCargos } from '../../server/src/cargos';
 
 /** Valor do filtro de cargo em Usuários para quem não tem cargo. */
@@ -35,33 +36,25 @@ const quantos = (total: number) => `${total} ${total === 1 ? 'usuário' : 'usuá
 /** Informativo lateral da tela Usuários: o que cada perfil libera e os cargos da lista, com quantos usuários ativos têm cada um.
  * Clicar numa contagem filtra a lista de usuários por aquele perfil ou cargo. */
 export default function CargosEPerfis({ usuarios, onFiltrar, onClose }: { usuarios: Usuario[]; onFiltrar: (filtro: Partial<FiltroUsuarios>) => void; onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [aba, setAba] = useState<'perfis' | 'cargos'>('perfis');
-  // o StrictMode roda o efeito duas vezes; fechar é sempre desmontar (onClose), sem depender do evento close nativo,
-  // que não chega quando o Esc fecha um dialog aberto duas vezes (o mesmo padrão de dialogos.tsx)
-  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
   const ativos = usuarios.filter((usuario) => usuario.ativo);
   // cargos antigos fora da lista continuam válidos para quem já os tem, então também aparecem aqui
   const antigos = [...new Set(ativos.map((usuario) => usuario.cargo).filter((cargo): cargo is string => !!cargo && !nomesCargos.includes(cargo)))].sort();
   const linhas = [...cargos.map((cargo) => ({ ...cargo, filtro: cargo.nome, antigo: false })), ...antigos.map((nome) => ({ nome, descricao: 'Cargo antigo, fora da lista atual. Continua valendo para quem já o tem, mas não é oferecido a novos usuários.', filtro: nome, antigo: true })), { nome: 'Sem cargo', descricao: 'Usuário sem cargo definido.', filtro: SEM_CARGO, antigo: false }];
   const contar = (filtro: string) => ativos.filter((usuario) => filtro === SEM_CARGO ? !usuario.cargo : usuario.cargo === filtro).length;
   const verUsuarios = (total: number, filtro: Partial<FiltroUsuarios>, rotulo: string) => total ? <button type="button" className="ghost" title={`Filtrar a lista: ${rotulo}`} onClick={() => onFiltrar(filtro)}>{quantos(total)}</button> : <span className="muted">{quantos(0)}</span>;
-  // o clique no fundo escuro chega no próprio dialog; o conteúdo ocupa o dialog inteiro, então clique dentro dele nunca fecha
-  return <dialog ref={ref} className="painel-lateral" aria-labelledby="cargos-titulo" onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="painel-lateral-conteudo">
-      <div className="modal-head"><div><span className="eyebrow">INFORMATIVO</span><h2 id="cargos-titulo">Cargos e perfis</h2></div><button type="button" className="close" aria-label="Fechar" title="Fechar" onClick={onClose}><Icone nome="fechar" /></button></div>
-      <p className="muted">O perfil define o que a pessoa pode fazer no sistema e as unidades vinculadas definem onde. O cargo só descreve a função na equipe, com uma exceção: o Caixa. Clique numa contagem para filtrar a lista.</p>
-      <div className="abas" role="tablist"><button type="button" role="tab" aria-selected={aba === 'perfis'} className={aba === 'perfis' ? 'active' : ''} onClick={() => setAba('perfis')}>Perfis de acesso</button><button type="button" role="tab" aria-selected={aba === 'cargos'} className={aba === 'cargos' ? 'active' : ''} onClick={() => setAba('cargos')}>Cargos</button></div>
-      {aba === 'perfis' ? <>
-        <div className="table-wrap"><table className="permissoes">
-          <thead><tr><th>Ação</th>{perfis.map((perfil) => <th key={perfil.tipo}><strong>{perfil.nome}</strong><small>{perfil.resumo}</small>{verUsuarios(ativos.filter((usuario) => usuario.tipo === perfil.tipo).length, { perfil: perfil.tipo }, `perfil ${perfil.nome}`)}</th>)}</tr></thead>
-          <tbody>{permissoes.map((linha) => <tr key={linha.acao}><td><strong>{linha.acao}</strong></td>{perfis.map((perfil) => <td key={perfil.tipo}>{celula(linha[perfil.tipo])}</td>)}</tr>)}</tbody>
-        </table></div>
-        <div className="aviso-cargo"><Icone nome="cargos" /><p><strong>Cargo Caixa:</strong> com esse cargo, até um Admin passa a funcionar como Colaborador nos caixas. Vê e edita só os próprios, não vê a diferença no fechamento cego e só abre caixa com a data de hoje. Os outros cargos não mudam o acesso.</p></div>
-      </> : <div className="table-wrap"><table className="tabela-cargos">
-        <thead><tr><th>Cargo</th><th>O que representa</th><th>Ativos</th></tr></thead>
-        <tbody>{linhas.map((linha) => <tr key={linha.filtro}><td><div className="usuario-nome"><strong className="texto-livre">{linha.nome}</strong>{linha.antigo && <span className="status inativo">Fora da lista</span>}{cargoRestringe(linha.filtro) && <span className="status aguardando" title="Fora o dono, só vê os próprios caixas, mesmo com perfil Admin">Restringe o acesso</span>}</div></td><td>{linha.descricao}</td><td>{verUsuarios(contar(linha.filtro), { cargo: linha.filtro }, `cargo ${linha.nome}`)}</td></tr>)}</tbody>
-      </table></div>}
-    </div>
-  </dialog>;
+  return <PainelLateral eyebrow="INFORMATIVO" titulo="Cargos e perfis" onClose={onClose}>
+    <p className="muted">O perfil define o que a pessoa pode fazer no sistema e as unidades vinculadas definem onde. O cargo só descreve a função na equipe, com uma exceção: o Caixa. Clique numa contagem para filtrar a lista.</p>
+    <div className="abas" role="tablist"><button type="button" role="tab" aria-selected={aba === 'perfis'} className={aba === 'perfis' ? 'active' : ''} onClick={() => setAba('perfis')}>Perfis de acesso</button><button type="button" role="tab" aria-selected={aba === 'cargos'} className={aba === 'cargos' ? 'active' : ''} onClick={() => setAba('cargos')}>Cargos</button></div>
+    {aba === 'perfis' ? <>
+      <div className="table-wrap"><table className="permissoes">
+        <thead><tr><th>Ação</th>{perfis.map((perfil) => <th key={perfil.tipo}><strong>{perfil.nome}</strong><small>{perfil.resumo}</small>{verUsuarios(ativos.filter((usuario) => usuario.tipo === perfil.tipo).length, { perfil: perfil.tipo }, `perfil ${perfil.nome}`)}</th>)}</tr></thead>
+        <tbody>{permissoes.map((linha) => <tr key={linha.acao}><td><strong>{linha.acao}</strong></td>{perfis.map((perfil) => <td key={perfil.tipo}>{celula(linha[perfil.tipo])}</td>)}</tr>)}</tbody>
+      </table></div>
+      <div className="aviso-cargo"><Icone nome="cargos" /><p><strong>Cargo Caixa:</strong> com esse cargo, até um Admin passa a funcionar como Colaborador nos caixas. Vê e edita só os próprios, não vê a diferença no fechamento cego e só abre caixa com a data de hoje. Os outros cargos não mudam o acesso.</p></div>
+    </> : <div className="table-wrap"><table className="tabela-cargos">
+      <thead><tr><th>Cargo</th><th>O que representa</th><th>Ativos</th></tr></thead>
+      <tbody>{linhas.map((linha) => <tr key={linha.filtro}><td><div className="usuario-nome"><strong className="texto-livre">{linha.nome}</strong>{linha.antigo && <span className="status inativo">Fora da lista</span>}{cargoRestringe(linha.filtro) && <span className="status aguardando" title="Fora o dono, só vê os próprios caixas, mesmo com perfil Admin">Restringe o acesso</span>}</div></td><td>{linha.descricao}</td><td>{verUsuarios(contar(linha.filtro), { cargo: linha.filtro }, `cargo ${linha.nome}`)}</td></tr>)}</tbody>
+    </table></div>}
+  </PainelLateral>;
 }

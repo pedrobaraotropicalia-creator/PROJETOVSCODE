@@ -5,8 +5,13 @@ import { regrasVoucherPadrao } from './voucher';
 
 const file = process.env.DATABASE_FILE || (process.env.K_SERVICE ? '/tmp/data/caixa.db' : './data/caixa.db');
 fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+// caminho absoluto, o mesmo do deploy/litestream.yml, com que o app pede ao Litestream o envio de cada escrita (replicacao.ts)
+export const arquivoBanco = path.resolve(file);
 export const db = new Database(file);
 db.pragma('foreign_keys = ON');
+// WAL é exigido pelo Litestream, que no Cloud Run copia o banco para o Cloud Storage (deploy/iniciar.sh). Quando ele segura a trava
+// num checkpoint, a escrita do app espera até 5 s (timeout padrão do better-sqlite3) em vez de falhar
+db.pragma('journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, email TEXT UNIQUE NOT NULL, senha_hash TEXT NOT NULL, tipo TEXT NOT NULL DEFAULT 'funcionario', ativo INTEGER NOT NULL DEFAULT 1, criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS unidades (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT UNIQUE NOT NULL, ativo INTEGER NOT NULL DEFAULT 1, criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -43,6 +48,17 @@ CREATE VIEW cofre_extrato AS
   SELECT 'e' || id, NULL, id, unidade_id, 'envio_caixa', dinheiro_fisico, data_caixa, NULL, NULL, usuario_id, finalizado_em, 1, NULL, NULL FROM fechamentos WHERE movimenta_cofre=1 AND status<>'aberto' AND dinheiro_fisico<>0
   UNION ALL
   SELECT 'r' || id, NULL, id, unidade_id, 'retirada_troco', -saldo_inicial, data_caixa, NULL, NULL, usuario_id, finalizado_em, 1, NULL, NULL FROM fechamentos WHERE movimenta_cofre=1 AND status<>'aberto' AND saldo_inicial<>0`);
+// cédulas e moedas de cada lançamento do dono (quantidade sem sinal: o sentido é o do valor, que é a soma delas); a transferência grava as mesmas
+// nas duas pontas. Os lançamentos anteriores a esta tabela ficam sem cédulas
+db.exec('CREATE TABLE IF NOT EXISTS cofre_cedulas (movimentacao_id INTEGER NOT NULL REFERENCES cofre_movimentacoes(id), denominacao REAL NOT NULL, quantidade INTEGER NOT NULL CHECK(quantidade > 0), PRIMARY KEY (movimentacao_id, denominacao))');
+// as cédulas de cada linha do cofre_extrato (mesma chave), com sinal: as dos lançamentos e as contagens dos caixas que movimentam o cofre
+// (a do fechamento entra com o envio, a da abertura sai com a retirada para troco)
+db.exec(`DROP VIEW IF EXISTS cofre_extrato_cedulas;
+CREATE VIEW cofre_extrato_cedulas AS
+  SELECT 'm' || m.id chave, m.unidade_id, m.tipo, m.data, m.ativo, c.denominacao, CASE WHEN m.valor < 0 THEN -c.quantidade ELSE c.quantidade END quantidade FROM cofre_cedulas c JOIN cofre_movimentacoes m ON m.id=c.movimentacao_id
+  UNION ALL
+  SELECT CASE c.etapa WHEN 'fechamento' THEN 'e' ELSE 'r' END || f.id, f.unidade_id, CASE c.etapa WHEN 'fechamento' THEN 'envio_caixa' ELSE 'retirada_troco' END, f.data_caixa, 1, c.denominacao, CASE c.etapa WHEN 'fechamento' THEN c.quantidade ELSE -c.quantidade END
+  FROM contagens_dinheiro c JOIN fechamentos f ON f.id=c.fechamento_id WHERE f.movimenta_cofre=1 AND f.status<>'aberto' AND c.quantidade<>0`);
 // na criação da tabela, cada usuário é vinculado às unidades onde já registrou caixa; depois disso só o dono altera os vínculos
 const vinculosNovos = !db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usuario_unidades'").get();
 db.transaction(() => {
