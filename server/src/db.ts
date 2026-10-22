@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { regrasVoucherPadrao } from './voucher';
 
 const file = process.env.DATABASE_FILE || (process.env.K_SERVICE ? '/tmp/data/caixa.db' : './data/caixa.db');
 fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
@@ -113,3 +114,12 @@ if (!colunasUnidade.includes('fechamento_cego')) db.transaction(() => {
   db.prepare('UPDATE unidades SET tolerancia_dinheiro=?, fechamento_cego=?').run(Number(antigas.tolerancia_dinheiro) || 0, antigas.fechamento_cego === '0' ? 0 : 1);
   db.exec('DROP TABLE configuracoes');
 })();
+
+// endereço, telefone e regras de uso (uma por linha) saem no PDF do voucher da unidade; as regras começam com as padrão (voucher.ts)
+try { db.exec('ALTER TABLE unidades ADD COLUMN endereco TEXT'); } catch { /* coluna já existe */ }
+try { db.exec('ALTER TABLE unidades ADD COLUMN telefone TEXT'); } catch { /* coluna já existe */ }
+try { db.exec(`ALTER TABLE unidades ADD COLUMN regras_voucher TEXT NOT NULL DEFAULT '${regrasVoucherPadrao}'`); } catch { /* coluna já existe */ }
+// vouchers (vales consumo) de cada unidade. A situação não é gravada: cancelado (ativo=0), vencido (validade antes de hoje) ou disponível,
+// calculada na consulta. Datas em AAAA-MM-DD de Brasília; a validade é o último dia em que o voucher vale
+db.exec(`CREATE TABLE IF NOT EXISTS vouchers (id INTEGER PRIMARY KEY AUTOINCREMENT, codigo TEXT NOT NULL UNIQUE, unidade_id INTEGER NOT NULL REFERENCES unidades(id), valor REAL NOT NULL CHECK(valor > 0), email TEXT NOT NULL, nome TEXT NOT NULL, origem TEXT, data_emissao TEXT NOT NULL, validade TEXT NOT NULL, observacoes TEXT, usuario_id INTEGER NOT NULL REFERENCES usuarios(id), criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, ativo INTEGER NOT NULL DEFAULT 1, cancelado_por INTEGER REFERENCES usuarios(id), cancelado_em TEXT, motivo_cancelamento TEXT);
+CREATE INDEX IF NOT EXISTS vouchers_emissao ON vouchers(data_emissao);`);

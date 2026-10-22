@@ -3,7 +3,7 @@
 // nunca entram (a rota avisa que mudaram por `extras`, sem o valor).
 import { db } from './db';
 
-export type Entidade = 'caixa' | 'unidade' | 'usuario' | 'maquininha' | 'motivo' | 'cofre';
+export type Entidade = 'caixa' | 'unidade' | 'usuario' | 'maquininha' | 'motivo' | 'cofre' | 'voucher';
 // unidadeId: a unidade do registro (caixa, maquininha, a própria unidade, lançamento do cofre), para o admin ver só as vinculadas a ele
 export type Foto = { descricao: string; campos: Record<string, string>; unidadeId?: number };
 export type Alteracao = { campo: string; de: string | null; para: string | null };
@@ -16,9 +16,9 @@ const perfis: Record<string, string> = { funcionario: 'Colaborador', admin: 'Adm
 const tiposCofre: Record<string, string> = { transferencia: 'Transferência entre unidades', deposito_banco: 'Depósito no banco', pagamento_fornecedor: 'Pagamento a fornecedor', retirada_dono: 'Retirada do dono', aporte: 'Aporte', ajuste: 'Ajuste de conferência', outros: 'Outros' };
 
 export function fotoUnidade(id: number): Foto | null {
-  const u = db.prepare('SELECT * FROM unidades WHERE id=?').get(id) as { nome: string; troco_continua: number; tolerancia_dinheiro: number; fechamento_cego: number; ativo: number } | undefined;
+  const u = db.prepare('SELECT * FROM unidades WHERE id=?').get(id) as { nome: string; troco_continua: number; tolerancia_dinheiro: number; fechamento_cego: number; endereco: string | null; telefone: string | null; regras_voucher: string; ativo: number } | undefined;
   if (!u) return null;
-  return { descricao: `Unidade ${u.nome}`, unidadeId: id, campos: { Nome: u.nome, 'Troco passa para o próximo caixa': u.troco_continua ? 'Sim' : 'Não', 'Tolerância de quebra': brl(u.tolerancia_dinheiro), 'Fechamento cego': u.fechamento_cego ? 'Ligado' : 'Desligado', Situação: u.ativo ? 'Ativa' : 'Excluída' } };
+  return { descricao: `Unidade ${u.nome}`, unidadeId: id, campos: { Nome: u.nome, 'Troco passa para o próximo caixa': u.troco_continua ? 'Sim' : 'Não', 'Tolerância de quebra': brl(u.tolerancia_dinheiro), 'Fechamento cego': u.fechamento_cego ? 'Ligado' : 'Desligado', Endereço: u.endereco || '—', Telefone: u.telefone || '—', 'Regras do voucher': u.regras_voucher.split('\n').join(' / ') || '—', Situação: u.ativo ? 'Ativa' : 'Excluída' } };
 }
 
 export function fotoUsuario(id: number): Foto | null {
@@ -71,6 +71,13 @@ export function fotoMovimentacao(id: number): Foto | null {
   }
   const tipo = tiposCofre[m.tipo] ?? m.tipo;
   return { descricao: `${tipo} · ${m.unidade} · ${diaBr(m.data)}`, unidadeId: m.unidade_id, campos: { Tipo: tipo, Unidade: m.unidade, Valor: `${m.valor >= 0 ? 'Entrada' : 'Saída'} de ${brl(Math.abs(m.valor))}`, ...comum } };
+}
+
+// voucher (vale consumo); vencido não entra na foto porque é a data que muda, não uma alteração
+export function fotoVoucher(id: number): Foto | null {
+  const v = db.prepare('SELECT v.*, u.nome unidade FROM vouchers v JOIN unidades u ON u.id=v.unidade_id WHERE v.id=?').get(id) as { codigo: string; unidade_id: number; unidade: string; valor: number; email: string; nome: string; origem: string | null; data_emissao: string; validade: string; observacoes: string | null; ativo: number; motivo_cancelamento: string | null } | undefined;
+  if (!v) return null;
+  return { descricao: `Voucher ${v.codigo} · ${v.unidade} · ${brl(v.valor)}`, unidadeId: v.unidade_id, campos: { Código: v.codigo, Unidade: v.unidade, Valor: brl(v.valor), 'E-mail': v.email, Beneficiário: v.nome, Origem: v.origem || '—', Emissão: diaBr(v.data_emissao), Validade: diaBr(v.validade), Observações: v.observacoes || '—', Situação: v.ativo ? 'Ativo' : 'Cancelado', 'Motivo do cancelamento': v.motivo_cancelamento || '—' } };
 }
 
 const inserir = db.prepare('INSERT INTO auditoria (usuario_id, entidade, entidade_id, unidade_id, acao, descricao, alteracoes) VALUES (?,?,?,?,?,?,?)');

@@ -165,7 +165,7 @@ aside nav .nav-label{display:block;height:1px;margin:10px 14px;background:#fffff
 /* números de destaque com dígitos tabulares (mesma largura, alinham entre cartões). O app usa só a DM Sans: a Space Grotesk saiu porque
    o "1" e o "N" dela parecem cortados. Elemento novo que mostra número entra aqui, com o mesmo seletor da regra que define a fonte
    (o shorthand font: dela zera a variante numérica) */
-.stats strong,.reconcile strong,.detail-grid strong,.detail-resultado strong,.step-actions strong,.cash-count-total,.medias-caixa strong,.cofre-saldos strong,.filter-summary strong{font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums}
+.stats strong,.reconcile strong,.detail-grid strong,.detail-resultado strong,.step-actions strong,.cash-count-total,.medias-caixa strong,.cofre-saldos strong,.filter-summary strong,.codigo-acesso strong{font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums}
 /* tela de login com a identidade do Grupo Tropicalia (tropicaliaolimpia.com.br): o degradê grafite → vermelho queimado do site,
    o âmbar dos cartões das unidades e os logos oficiais (client/public). O botão usa texto escuro: branco no âmbar não tem contraste */
 .auth-shell{--tropicalia-ambar:#e29a30;--tropicalia-ambar-escuro:#c9821f;--tropicalia-vermelho:#b22d30;--tropicalia-grafite:#2b2b2b;background:linear-gradient(109.6deg,#2b2b2b 11.2%,#6d2212 91.1%)}
@@ -195,6 +195,14 @@ aside nav .nav-label{display:block;height:1px;margin:10px 14px;background:#fffff
 .de-para{list-style:none;margin:0;padding:0;display:grid;gap:4px}.de-para li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:20px}.de-para-aberto li{white-space:normal;overflow-wrap:anywhere}
 .de-para-campo{color:#82939a;font-weight:600}.de-para-de{color:#9aa9b0}.de-para-para{color:#18324a}.de-para .icone{width:13px;height:13px;margin:0 4px;color:#9aa9b0;vertical-align:-2px}
 .de-para-mais{display:block;padding:0;margin-top:4px;font-size:12px;line-height:20px}
+/* vouchers: situação na lista (disponível usa o .status verde), código com dígitos tabulares, busca nos filtros e campos do modal */
+.status.vencido{background:#fff1e6;color:#b76537;white-space:nowrap}.status.cancelado{background:#eef2f3;color:#70838d;white-space:nowrap}
+.voucher-codigo{font-variant-numeric:tabular-nums;letter-spacing:.5px}.tabela-vouchers .voucher-codigo,.tabela-vouchers .voucher-valor{white-space:nowrap}.voucher-email{display:block;margin-top:2px;font-size:12px;color:#82939a}
+.close-filters .vouchers-busca{flex:2 1 240px;min-width:0}
+.vouchers-cabecalho .primary{white-space:nowrap}@media(max-width:800px){.vouchers-cabecalho{flex-wrap:wrap;gap:12px}}
+.modal textarea{border:1px solid #dbe3e6;background:#fbfcfc;padding:12px 13px;border-radius:3px;outline:none;color:#18324a;font:inherit;font-weight:400;resize:vertical;min-height:84px}.modal textarea:focus{border-color:#e27b43;box-shadow:0 0 0 3px #e27b431a}
+.voucher-campos{border:0;margin:0;padding:0;min-width:0}.voucher-campos:disabled input,.voucher-campos:disabled select,.voucher-campos:disabled textarea{color:#70838d;background:#f4f6f7}
+.voucher-autoria{margin:4px 0 0}.voucher-criado{justify-content:center}.voucher-criado strong{font-size:28px;letter-spacing:2px}
 /* Tabelas em cartões no celular: cada linha vira um cartão e as células se arrumam pela classe.
    cartao-titulo + cartao-destaque na 1ª linha (destaque à direita); cartao-meta numa linha miúda separada por pontos;
    cartao-campo com o rótulo (data-rotulo) em cima, lado a lado; cartao-acoes no rodapé, à direita.

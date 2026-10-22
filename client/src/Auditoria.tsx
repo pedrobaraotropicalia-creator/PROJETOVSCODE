@@ -10,7 +10,7 @@ type Alteracao = { campo: string; de: string | null; para: string | null };
 type Registro = { id: number; criado_em: string; usuario_id: number; usuario_nome: string; entidade: string; entidade_id: number | null; acao: string; descricao: string; alteracoes: Alteracao[] };
 type Filtro = { de: string; ate: string; entidade: string; usuario: string };
 
-const entidades: Record<string, string> = { caixa: 'Caixas', unidade: 'Unidades', usuario: 'Usuários', maquininha: 'Maquininhas', motivo: 'Motivos de saída', cofre: 'Cofre' };
+const entidades: Record<string, string> = { caixa: 'Caixas', unidade: 'Unidades', usuario: 'Usuários', maquininha: 'Maquininhas', motivo: 'Motivos de saída', cofre: 'Cofre', voucher: 'Vouchers' };
 // abre (e volta ao limpar) no mês corrente, o mesmo padrão de Caixas fechados, Cofre e Relatórios
 const filtroPadrao = (): Filtro => { const mes = mesAtual(); return { de: formatDay(mes.de), ate: formatDay(mes.ate), entidade: '', usuario: '' }; };
 // selo pela natureza da ação: criação em verde, exclusão em vermelho, o resto (alteração, finalização, conferência...) em laranja
