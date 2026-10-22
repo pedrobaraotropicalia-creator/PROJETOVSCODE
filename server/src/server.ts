@@ -7,9 +7,10 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z, ZodError } from 'zod';
 import { db, recalcularDiferencas } from './db';
+import { regrasVoucherPadrao, VALIDADE_VOUCHER_DIAS } from './voucher';
 import { limites } from './limites';
 import { cargoRestringe, nomesCargos } from './cargos';
-import { fotoCaixa, fotoMaquininha, fotoMotivo, fotoMovimentacao, fotoUnidade, fotoUsuario, registrar } from './auditoria';
+import { fotoCaixa, fotoMaquininha, fotoMotivo, fotoMovimentacao, fotoUnidade, fotoUsuario, fotoVoucher, registrar } from './auditoria';
 
 const app = express();
 app.use(cors());
@@ -34,6 +35,8 @@ const formasPagamento = ['credito', 'debito', 'pix', 'refeicao', 'alimentacao', 
 const centavos = (value: number) => Math.round(value * 100) / 100;
 const brl = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const texto = (obrigatorio: string, campo: string, max: number) => z.string({ error: obrigatorio }).trim().min(1, obrigatorio).max(max, `${campo} deve ter no máximo ${max} caracteres.`);
+// campo de texto que pode ficar vazio: ausente = não mexe (PATCH), vazio ou null = apaga
+const textoOpcional = (campo: string, max: number) => z.string({ error: `${campo} é inválido.` }).trim().max(max, `${campo} deve ter no máximo ${max} caracteres.`).nullable().optional().transform((valor) => valor === undefined ? undefined : valor || null);
 const nomeUsuarioSchema = texto('Informe o nome.', 'O nome', limites.nomeUsuario);
 const emailSchema = z.string({ error: 'Informe um e-mail válido.' }).trim().toLowerCase().max(limites.email, `O e-mail deve ter no máximo ${limites.email} caracteres.`).regex(/^\S+@\S+\.\S+$/, 'Informe um e-mail válido.');
 const senhaSchema = z.string({ error: 'Informe a senha.' }).min(8, 'A senha deve ter pelo menos 8 caracteres.').refine((senha) => Buffer.byteLength(senha) <= limites.senhaBytes, `A senha deve ter no máximo ${limites.senhaBytes} caracteres (letras acentuadas contam como 2).`);
@@ -59,7 +62,8 @@ const entradasSchema = z.object({ entradas: z.partialRecord(z.enum(formasPagamen
 const maquininhasSchema = z.object({ maquininhas: z.array(z.object({ maquininha_id: z.number().int().positive(), valor: valorSchema })) });
 const saidasSchema = z.object({ saidas: z.array(z.object({ valor: z.number({ error: 'Informe o valor da saída.' }).positive('A saída deve ter valor maior que zero.').max(limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`).transform(centavos), motivo_id: z.number({ error: 'Escolha o motivo da saída.' }).int().positive('Escolha o motivo da saída.'), observacao: z.string().trim().max(limites.motivoSaida, `A observação deve ter no máximo ${limites.motivoSaida} caracteres.`).optional().transform((texto) => texto || null) })).max(limites.saidasPorCaixa, `No máximo ${limites.saidasPorCaixa} saídas por caixa.`) });
 const contagemFinalSchema = z.object({ contagens: contagensSchema });
-const unidadeSchema = z.object({ nome: nomeUnidadeSchema.optional(), troco_continua: z.boolean({ error: 'Informe se o troco passa para o próximo caixa.' }).optional(), tolerancia_dinheiro: z.number({ error: 'Informe a tolerância.' }).nonnegative('A tolerância não pode ser negativa.').max(limites.tolerancia, `A tolerância deve ser no máximo ${brl(limites.tolerancia)}.`).transform(centavos).optional(), fechamento_cego: z.boolean({ error: 'Informe se o fechamento é cego.' }).optional() });
+const unidadeSchema = z.object({ nome: nomeUnidadeSchema.optional(), troco_continua: z.boolean({ error: 'Informe se o troco passa para o próximo caixa.' }).optional(), tolerancia_dinheiro: z.number({ error: 'Informe a tolerância.' }).nonnegative('A tolerância não pode ser negativa.').max(limites.tolerancia, `A tolerância deve ser no máximo ${brl(limites.tolerancia)}.`).transform(centavos).optional(), fechamento_cego: z.boolean({ error: 'Informe se o fechamento é cego.' }).optional(), endereco: textoOpcional('O endereço', limites.enderecoUnidade), telefone: textoOpcional('O telefone', limites.telefoneUnidade),
+  regras_voucher: z.string({ error: 'Regras do voucher inválidas.' }).max(limites.regrasVoucher, `As regras do voucher devem ter no máximo ${limites.regrasVoucher} caracteres.`).optional().transform((regras) => regras?.split('\n').map((linha) => linha.trim()).filter(Boolean).join('\n')) });
 const diaAteHoje = dia.refine((data) => data <= hoje(), 'A data não pode ser futura.');
 const unidadesFiltroSchema = z.string({ error: 'Unidades inválidas.' }).regex(/^[1-9]\d*(,[1-9]\d*)*$/, 'Unidades inválidas.').optional().transform((value) => value ? [...new Set(value.split(',').map(Number))] : []);
 const observacaoCofreSchema = z.string().trim().max(limites.observacaoCofre, `A observação deve ter no máximo ${limites.observacaoCofre} caracteres.`).optional().transform((texto) => texto || null);
@@ -134,8 +138,8 @@ const unidadesComMesmoNome = (nome: string, ignorarId?: number) => { const chave
 const conflitoDeNomeUnidade = (nome: string, ignorarId?: number) => { const iguais = unidadesComMesmoNome(nome, ignorarId); const ativa = iguais.find((unidade) => unidade.ativo); if (ativa) return `Já existe a unidade ${ativa.nome}.`; return iguais.length ? `Já existe a unidade excluída ${iguais[0].nome}. Reative-a em Unidades excluídas.` : null; };
 // cadastro no mesmo formulário da edição: além do nome, já vêm o troco e as regras de fechamento (sem eles, valem os padrões da tabela)
 const novaUnidadeSchema = unidadeSchema.extend({ nome: nomeUnidadeSchema });
-app.post('/api/unidades', auth, allow('dono'), (req: RequestWithUser, res) => { const { nome, troco_continua = false, tolerancia_dinheiro = 0, fechamento_cego = true } = novaUnidadeSchema.parse(req.body ?? {}); const conflito = conflitoDeNomeUnidade(nome); if (conflito) return res.status(409).json({ erro: conflito }); try { const result = db.prepare('INSERT INTO unidades (nome, troco_continua, tolerancia_dinheiro, fechamento_cego) VALUES (?,?,?,?)').run(nome, troco_continua ? 1 : 0, tolerancia_dinheiro, fechamento_cego ? 1 : 0); const id = Number(result.lastInsertRowid); registrar(req.user!.id, 'unidade', id, 'Criou', null, fotoUnidade(id)); res.status(201).json(db.prepare('SELECT * FROM unidades WHERE id=?').get(id)); } catch { res.status(409).json({ erro: 'Esta unidade já existe.' }); } });
-app.patch('/api/unidades/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const { nome, troco_continua, tolerancia_dinheiro, fechamento_cego } = unidadeSchema.parse(req.body); const conflito = nome === undefined ? null : conflitoDeNomeUnidade(nome, Number(req.params.id)); if (conflito) return res.status(409).json({ erro: conflito }); const updates: string[] = []; const params: unknown[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nome); } if (troco_continua !== undefined) { updates.push('troco_continua=?'); params.push(troco_continua ? 1 : 0); } if (tolerancia_dinheiro !== undefined) { updates.push('tolerancia_dinheiro=?'); params.push(tolerancia_dinheiro); } if (fechamento_cego !== undefined) { updates.push('fechamento_cego=?'); params.push(fechamento_cego ? 1 : 0); } if (!updates.length) return res.status(400).json({ erro: 'Nada para atualizar.' }); const antes = fotoUnidade(Number(req.params.id)); try { const result = db.prepare(`UPDATE unidades SET ${updates.join(', ')} WHERE id=? AND ativo=1`).run(...params, req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); registrar(req.user!.id, 'unidade', Number(req.params.id), 'Alterou', antes, fotoUnidade(Number(req.params.id))); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); } catch { res.status(409).json({ erro: 'Já existe uma unidade com este nome.' }); } });
+app.post('/api/unidades', auth, allow('dono'), (req: RequestWithUser, res) => { const { nome, troco_continua = false, tolerancia_dinheiro = 0, fechamento_cego = true, endereco = null, telefone = null, regras_voucher = regrasVoucherPadrao } = novaUnidadeSchema.parse(req.body ?? {}); const conflito = conflitoDeNomeUnidade(nome); if (conflito) return res.status(409).json({ erro: conflito }); try { const result = db.prepare('INSERT INTO unidades (nome, troco_continua, tolerancia_dinheiro, fechamento_cego, endereco, telefone, regras_voucher) VALUES (?,?,?,?,?,?,?)').run(nome, troco_continua ? 1 : 0, tolerancia_dinheiro, fechamento_cego ? 1 : 0, endereco, telefone, regras_voucher); const id = Number(result.lastInsertRowid); registrar(req.user!.id, 'unidade', id, 'Criou', null, fotoUnidade(id)); res.status(201).json(db.prepare('SELECT * FROM unidades WHERE id=?').get(id)); } catch { res.status(409).json({ erro: 'Esta unidade já existe.' }); } });
+app.patch('/api/unidades/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const { nome, troco_continua, tolerancia_dinheiro, fechamento_cego, ...dadosVoucher } = unidadeSchema.parse(req.body); const conflito = nome === undefined ? null : conflitoDeNomeUnidade(nome, Number(req.params.id)); if (conflito) return res.status(409).json({ erro: conflito }); const updates: string[] = []; const params: unknown[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nome); } if (troco_continua !== undefined) { updates.push('troco_continua=?'); params.push(troco_continua ? 1 : 0); } if (tolerancia_dinheiro !== undefined) { updates.push('tolerancia_dinheiro=?'); params.push(tolerancia_dinheiro); } if (fechamento_cego !== undefined) { updates.push('fechamento_cego=?'); params.push(fechamento_cego ? 1 : 0); } for (const [campo, valor] of Object.entries(dadosVoucher)) if (valor !== undefined) { updates.push(`${campo}=?`); params.push(valor); } if (!updates.length) return res.status(400).json({ erro: 'Nada para atualizar.' }); const antes = fotoUnidade(Number(req.params.id)); try { const result = db.prepare(`UPDATE unidades SET ${updates.join(', ')} WHERE id=? AND ativo=1`).run(...params, req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade não encontrada.' }); registrar(req.user!.id, 'unidade', Number(req.params.id), 'Alterou', antes, fotoUnidade(Number(req.params.id))); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); } catch { res.status(409).json({ erro: 'Já existe uma unidade com este nome.' }); } });
 // as legadas UNIDADE N ficam de fora: o boot as desativa de novo (db.ts)
 app.get('/api/unidades/excluidas', auth, allow('dono'), (_, res) => res.json(db.prepare("SELECT * FROM unidades WHERE ativo=0 AND nome NOT GLOB 'UNIDADE [0-9]*' ORDER BY nome").all()));
 app.post('/api/unidades/:id/reativar', auth, allow('dono'), (req: RequestWithUser, res) => { const alvo = db.prepare('SELECT id, nome FROM unidades WHERE id=? AND ativo=0').get(req.params.id) as { id: number; nome: string } | undefined; const ativa = alvo && unidadesComMesmoNome(alvo.nome, alvo.id).find((unidade) => unidade.ativo); if (ativa) return res.status(409).json({ erro: `Já existe a unidade ativa ${ativa.nome}. Renomeie-a antes de reativar esta.` }); const antes = fotoUnidade(Number(req.params.id)); const result = db.prepare("UPDATE unidades SET ativo=1 WHERE id=? AND ativo=0 AND nome NOT GLOB 'UNIDADE [0-9]*'").run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Unidade excluída não encontrada.' }); registrar(req.user!.id, 'unidade', Number(req.params.id), 'Reativou', antes, fotoUnidade(Number(req.params.id))); res.json(db.prepare('SELECT * FROM unidades WHERE id=?').get(req.params.id)); });
@@ -332,6 +336,92 @@ app.patch('/api/motivos-saida/:id', auth, allow('admin', 'dono'), (req: RequestW
   res.json(db.prepare('SELECT id, nome FROM motivos_saida WHERE id=?').get(req.params.id));
 });
 app.delete('/api/motivos-saida/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const antes = fotoMotivo(Number(req.params.id)); const result = db.prepare('UPDATE motivos_saida SET ativo=0 WHERE id=? AND ativo=1').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Motivo não encontrado.' }); registrar(req.user!.id, 'motivo', Number(req.params.id), 'Excluiu', antes, fotoMotivo(Number(req.params.id))); res.status(204).end(); });
+// Vouchers (vales consumo): admin e dono das unidades vinculadas cadastram, editam e cancelam; só o dono reativa.
+// A situação é calculada na consulta: cancelado, vencido (validade antes de hoje, em Brasília) ou disponível
+const somarDias = (dia: string, dias: number) => new Date(Date.parse(`${dia}T12:00:00Z`) + dias * 86_400_000).toISOString().slice(0, 10);
+// código gerado: 12 dígitos aleatórios e um verificador (Luhn), que deixa recusar erro de digitação no resgate sem consultar o banco
+const digitoLuhn = (digitos: string) => { const soma = [...digitos].reverse().reduce((total, digito, indice) => { const valor = Number(digito) * (indice % 2 === 0 ? 2 : 1); return total + (valor > 9 ? valor - 9 : valor); }, 0); return String((10 - soma % 10) % 10); };
+const novoCodigoVoucher = () => { const base = Array.from({ length: 12 }, () => randomInt(10)).join(''); return base + digitoLuhn(base); };
+// código digitado (vale já impresso por outro sistema): sem espaços e em maiúsculas
+const codigoVoucherSchema = z.string({ error: 'Código inválido.' }).transform((codigo) => codigo.toUpperCase().replace(/\s+/g, ''))
+  .refine((codigo) => codigo.length <= limites.codigoVoucher, `O código deve ter no máximo ${limites.codigoVoucher} caracteres.`)
+  .refine((codigo) => /^[A-Z0-9-]*$/.test(codigo), 'O código aceita só letras, números e traço.');
+const camposVoucher = {
+  unidade_id: z.number({ error: 'Informe a unidade.' }).int().positive('Informe a unidade.'),
+  valor: z.number({ error: 'Informe o valor do voucher.' }).positive('O valor do voucher deve ser maior que zero.').max(limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`).transform(centavos),
+  email: emailSchema,
+  nome: texto('Informe o nome do beneficiário.', 'O nome do beneficiário', limites.nomeBeneficiario),
+  origem: textoOpcional('A origem', limites.origemVoucher),
+  data_emissao: dia.refine((data) => data <= hoje(), 'A data de emissão não pode ser futura.'),
+  validade: dia,
+  observacoes: textoOpcional('As observações', limites.observacaoVoucher)
+};
+// no cadastro, código vazio = gerado, emissão = hoje e validade = emissão + 7 dias
+const novoVoucherSchema = z.object({ ...camposVoucher, codigo: codigoVoucherSchema.optional(), data_emissao: camposVoucher.data_emissao.optional(), validade: camposVoucher.validade.optional() });
+const voucherSchema = z.object({ ...camposVoucher, codigo: codigoVoucherSchema.refine((codigo) => codigo.length > 0, 'Informe o código.') }).partial();
+const filtroVouchersSchema = z.object({ de: dia.optional(), ate: dia.optional(), unidades: unidadesFiltroSchema });
+const motivoCancelamentoSchema = texto('Informe o motivo do cancelamento.', 'O motivo do cancelamento', limites.motivoCancelamento);
+type Voucher = { id: number; unidade_id: number; data_emissao: string; validade: string; ativo: number };
+// o primeiro parâmetro de toda consulta é hoje(), para a situação
+const selectVoucher = (extras = '') => `SELECT v.*, CASE WHEN v.ativo=0 THEN 'cancelado' WHEN v.validade < ? THEN 'vencido' ELSE 'disponivel' END situacao, u.nome unidade_nome${extras}, usr.nome usuario_nome, canc.nome cancelado_por_nome
+  FROM vouchers v JOIN unidades u ON u.id=v.unidade_id JOIN usuarios usr ON usr.id=v.usuario_id LEFT JOIN usuarios canc ON canc.id=v.cancelado_por`;
+// um voucher com os dados da unidade que saem no PDF
+const lerVoucher = (id: number) => db.prepare(`${selectVoucher(', u.endereco unidade_endereco, u.telefone unidade_telefone, u.regras_voucher')} WHERE v.id=?`).get(hoje(), id) as (Voucher & Record<string, unknown>) | undefined;
+// o código é único na rede, inclusive entre os cancelados (que podem ser reativados)
+const conflitoCodigoVoucher = (codigo: string, ignorarId?: number) => { const existente = db.prepare('SELECT v.id, v.ativo, u.nome unidade FROM vouchers v JOIN unidades u ON u.id=v.unidade_id WHERE v.codigo=?').get(codigo) as { id: number; ativo: number; unidade: string } | undefined; return existente && existente.id !== ignorarId ? `Já existe o voucher ${codigo}${existente.ativo ? '' : ' (cancelado)'} em ${existente.unidade}.` : null; };
+const validadeAntesDaEmissao = { erro: 'A validade não pode ser anterior à emissão.' };
+app.get('/api/vouchers', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
+  const { de, ate, unidades } = filtroVouchersSchema.parse(req.query);
+  const where: string[] = []; const params: unknown[] = [hoje()];
+  if (de) { where.push('v.data_emissao >= ?'); params.push(de); }
+  if (ate) { where.push('v.data_emissao <= ?'); params.push(ate); }
+  if (unidades.length) { where.push(`v.unidade_id IN (${unidades.map(() => '?').join(',')})`); params.push(...unidades); }
+  if (req.user!.tipo !== 'dono') { const vinculadas = unidadesVinculadas(req.user!.id); where.push(`v.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})`); params.push(...vinculadas); }
+  res.json(db.prepare(`${selectVoucher()}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY v.data_emissao DESC, v.id DESC`).all(...params));
+});
+app.get('/api/vouchers/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => { const voucher = lerVoucher(Number(req.params.id)); if (!voucher) return res.status(404).json({ erro: 'Voucher não encontrado.' }); if (!acessaUnidade(req.user!, voucher.unidade_id)) return res.status(403).json(semAcessoUnidade); res.json(voucher); });
+app.post('/api/vouchers', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
+  const dados = novoVoucherSchema.parse(req.body ?? {});
+  if (!unidadeAtiva(dados.unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
+  if (!acessaUnidade(req.user!, dados.unidade_id)) return res.status(403).json(semAcessoUnidade);
+  const emissao = dados.data_emissao ?? hoje(); const validade = dados.validade ?? somarDias(emissao, VALIDADE_VOUCHER_DIAS);
+  if (validade < emissao) return res.status(400).json(validadeAntesDaEmissao);
+  const conflito = dados.codigo ? conflitoCodigoVoucher(dados.codigo) : null; if (conflito) return res.status(409).json({ erro: conflito });
+  let codigo = dados.codigo; while (!codigo) { const gerado = novoCodigoVoucher(); if (!conflitoCodigoVoucher(gerado)) codigo = gerado; }
+  let id: number;
+  try { id = Number(db.prepare('INSERT INTO vouchers (codigo,unidade_id,valor,email,nome,origem,data_emissao,validade,observacoes,usuario_id) VALUES (?,?,?,?,?,?,?,?,?,?)').run(codigo, dados.unidade_id, dados.valor, dados.email, dados.nome, dados.origem ?? null, emissao, validade, dados.observacoes ?? null, req.user!.id).lastInsertRowid); } catch { return res.status(409).json({ erro: `Já existe o voucher ${codigo}.` }); }
+  registrar(req.user!.id, 'voucher', id, 'Criou', null, fotoVoucher(id));
+  res.status(201).json(lerVoucher(id));
+});
+// edita só o que veio; o cancelado precisa ser reativado antes
+app.patch('/api/vouchers/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
+  const atual = db.prepare('SELECT id, unidade_id, data_emissao, validade, ativo FROM vouchers WHERE id=?').get(req.params.id) as Voucher | undefined;
+  if (!atual) return res.status(404).json({ erro: 'Voucher não encontrado.' });
+  if (!acessaUnidade(req.user!, atual.unidade_id)) return res.status(403).json(semAcessoUnidade);
+  if (!atual.ativo) return res.status(409).json({ erro: 'Este voucher está cancelado. Reative-o para editar.' });
+  const dados = voucherSchema.parse(req.body ?? {});
+  const campos = Object.entries(dados).filter(([, valor]) => valor !== undefined);
+  if (!campos.length) return res.status(400).json({ erro: 'Nada para atualizar.' });
+  if (dados.unidade_id !== undefined && dados.unidade_id !== atual.unidade_id) { if (!unidadeAtiva(dados.unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' }); if (!acessaUnidade(req.user!, dados.unidade_id)) return res.status(403).json(semAcessoUnidade); }
+  if ((dados.validade ?? atual.validade) < (dados.data_emissao ?? atual.data_emissao)) return res.status(400).json(validadeAntesDaEmissao);
+  const conflito = dados.codigo ? conflitoCodigoVoucher(dados.codigo, atual.id) : null; if (conflito) return res.status(409).json({ erro: conflito });
+  const antes = fotoVoucher(atual.id);
+  db.prepare(`UPDATE vouchers SET ${campos.map(([campo]) => `${campo}=?`).join(', ')} WHERE id=?`).run(...campos.map(([, valor]) => valor), atual.id);
+  registrar(req.user!.id, 'voucher', atual.id, 'Alterou', antes, fotoVoucher(atual.id));
+  res.json(lerVoucher(atual.id));
+});
+// cancelamento (exclusão lógica) com motivo; o código continua reservado
+app.delete('/api/vouchers/:id', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
+  const atual = db.prepare('SELECT id, unidade_id FROM vouchers WHERE id=? AND ativo=1').get(req.params.id) as Voucher | undefined;
+  if (!atual) return res.status(404).json({ erro: 'Voucher não encontrado.' });
+  if (!acessaUnidade(req.user!, atual.unidade_id)) return res.status(403).json(semAcessoUnidade);
+  const motivo = motivoCancelamentoSchema.parse(req.body?.motivo);
+  const antes = fotoVoucher(atual.id);
+  db.prepare('UPDATE vouchers SET ativo=0, cancelado_por=?, cancelado_em=CURRENT_TIMESTAMP, motivo_cancelamento=? WHERE id=?').run(req.user!.id, motivo, atual.id);
+  registrar(req.user!.id, 'voucher', atual.id, 'Cancelou', antes, fotoVoucher(atual.id));
+  res.json(lerVoucher(atual.id));
+});
+app.post('/api/vouchers/:id/reativar', auth, allow('dono'), (req: RequestWithUser, res) => { const id = Number(req.params.id); const antes = fotoVoucher(id); if (!db.prepare('UPDATE vouchers SET ativo=1, cancelado_por=NULL, cancelado_em=NULL, motivo_cancelamento=NULL WHERE id=? AND ativo=0').run(id).changes) return res.status(404).json({ erro: 'Voucher cancelado não encontrado.' }); registrar(req.user!.id, 'voucher', id, 'Reativou', antes, fotoVoucher(id)); res.json(lerVoucher(id)); });
 // o que o client mostra para o usuário: diferenças (quem confere vê sempre; os demais, se alguma unidade vinculada não usa fechamento cego)
 // e o campo de data na abertura do caixa
 app.get('/api/acesso', auth, (req: RequestWithUser, res) => res.json({ ve_diferenca: conferente(req.user!) || !!db.prepare('SELECT 1 FROM unidades u JOIN usuario_unidades v ON v.unidade_id=u.id WHERE v.usuario_id=? AND u.ativo=1 AND u.fechamento_cego=0').get(req.user!.id), escolhe_data_caixa: escolheDataCaixa(req.user!) }));
@@ -367,7 +457,7 @@ app.patch('/api/usuarios/:id/tipo', auth, allow('dono'), (req: RequestWithUser, 
 app.patch('/api/usuarios/:id', auth, allow('dono'), async (req: RequestWithUser, res) => { const id = Number(req.params.id); const target: any = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id); if (!target) return res.status(404).json({ erro: 'Usuário não encontrado.' }); const antes = fotoUsuario(id); const isOwnerAccount = target.email === adminEmail; const { nome, email, senha, cargo, tipo, unidades } = req.body || {}; const updates: string[] = []; const params: any[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nomeUsuarioSchema.parse(nome)); } if (email !== undefined) { updates.push('email=?'); params.push(emailSchema.parse(email)); } if (senha) { updates.push('senha_hash=?', 'codigo_acesso=NULL'); params.push(await bcrypt.hash(senhaSchema.parse(senha), 10)); } // cargos fora da lista que já existiam continuam válidos para quem já os tem
 if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !nomesCargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : unidadesUsuarioSchema.parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => salvarVinculos(id, novasUnidades))(); registrar(req.user!.id, 'usuario', id, 'Alterou', antes, fotoUsuario(id), senha ? [{ campo: 'Senha', de: null, para: 'redefinida pelo dono' }] : []); res.json({ usuario: lerUsuario(id) }); });
 // auditoria: as alterações do período pelo dia de Brasília, mais recentes primeiro; o de/para vem pronto de auditoria.ts.
-// O dono vê tudo; o admin, o que já enxerga no sistema: sem o cofre (só do dono), caixas, maquininhas e unidades só das unidades
+// O dono vê tudo; o admin, o que já enxerga no sistema: sem o cofre (só do dono), caixas, maquininhas, unidades e vouchers só das unidades
 // vinculadas, usuários e motivos todos; com cargo Caixa, só os caixas que ele mesmo alterou
 const auditoriaSchema = z.object({ de: dia, ate: dia }).refine((filtro) => filtro.de <= filtro.ate, 'A data inicial é depois da final.');
 app.get('/api/auditoria', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
@@ -375,7 +465,7 @@ app.get('/api/auditoria', auth, allow('admin', 'dono'), (req: RequestWithUser, r
   const where = ["date(a.criado_em, '-3 hours') BETWEEN ? AND ?"]; const params: unknown[] = [de, ate];
   if (req.user!.tipo !== 'dono') {
     const vinculadas = unidadesVinculadas(req.user!.id);
-    where.push(`(a.entidade IN ('usuario', 'motivo') OR (a.entidade IN ('caixa', 'maquininha', 'unidade') AND a.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})))`); params.push(...vinculadas);
+    where.push(`(a.entidade IN ('usuario', 'motivo') OR (a.entidade IN ('caixa', 'maquininha', 'unidade', 'voucher') AND a.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})))`); params.push(...vinculadas);
     if (isCaixaOnly(req.user)) { where.push("(a.entidade <> 'caixa' OR a.usuario_id = ?)"); params.push(req.user!.id); }
   }
   res.json((db.prepare(`SELECT a.id, a.criado_em, a.usuario_id, u.nome usuario_nome, a.entidade, a.entidade_id, a.acao, a.descricao, a.alteracoes FROM auditoria a JOIN usuarios u ON u.id=a.usuario_id WHERE ${where.join(' AND ')} ORDER BY a.id DESC`).all(...params) as { alteracoes: string }[]).map((linha) => ({ ...linha, alteracoes: JSON.parse(linha.alteracoes) })));

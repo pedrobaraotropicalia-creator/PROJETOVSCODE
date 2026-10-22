@@ -389,3 +389,85 @@ describe('auditoria', () => {
     expect(visto.some((item) => item.entidade === 'usuario' && item.entidade_id === corpo.usuario.id)).toBe(true);
   });
 });
+
+describe('vouchers', () => {
+  type Voucher = { id: number; codigo: string; unidade_id: number; valor: number; email: string; nome: string; data_emissao: string; validade: string; situacao: string; unidade_endereco: string | null; unidade_telefone: string | null; regras_voucher: string };
+  const somarDias = (dia: string, dias: number) => new Date(Date.parse(`${dia}T12:00:00Z`) + dias * 86_400_000).toISOString().slice(0, 10);
+  const luhnValido = (codigo: string) => [...codigo].reverse().reduce((soma, digito, indice) => { const valor = Number(digito) * (indice % 2 === 1 ? 2 : 1); return soma + (valor > 9 ? valor - 9 : valor); }, 0) % 10 === 0;
+  const novo = (dados: Record<string, unknown> = {}) => api('POST', '/vouchers', { unidade_id: unidades[0].id, valor: 50, email: 'cliente@exemplo.com', nome: 'Cliente da Sala', ...dados });
+  async function admin(emailAdmin: string, unidadesAdmin: number[]) {
+    const { corpo } = await api('POST', '/auth/register', { nome: 'Gerente', email: emailAdmin, senha, confirmacao: senha });
+    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { tipo: 'admin', unidades: unidadesAdmin });
+    return (await api('POST', '/auth/login', { email: emailAdmin, senha })).corpo.token as string;
+  }
+
+  it('sem código, o server gera 13 dígitos com verificador; emissão hoje e validade de 7 dias', async () => {
+    const { status, corpo } = await novo({ email: 'Bruna@Exemplo.com' });
+    expect(status).toBe(201);
+    expect(corpo.codigo).toMatch(/^\d{13}$/);
+    expect(luhnValido(corpo.codigo)).toBe(true);
+    expect(corpo).toMatchObject({ email: 'bruna@exemplo.com', nome: 'Cliente da Sala', valor: 50, data_emissao: hoje, validade: somarDias(hoje, 7), situacao: 'disponivel', ativo: 1 });
+  });
+
+  it('o código digitado fica sem espaços e em maiúsculas, e é único inclusive entre os cancelados', async () => {
+    const { corpo } = await novo({ codigo: ' 2610 2012-abc ' });
+    expect(corpo.codigo).toBe('26102012-ABC');
+    expect((await novo({ codigo: '26102012-abc' })).status).toBe(409);
+    await api('DELETE', `/vouchers/${corpo.id}`, { motivo: 'impresso errado' });
+    const repetido = await novo({ codigo: '26102012-ABC' });
+    expect(repetido.status).toBe(409);
+    expect(repetido.corpo.erro).toMatch(/cancelado/);
+    expect((await novo({ codigo: 'VALE#1' })).status).toBe(400);
+  });
+
+  it('a validade não vem antes da emissão, a emissão não é futura e o vencido é calculado pela data', async () => {
+    expect((await novo({ nome: undefined })).corpo.erro).toBe('Informe o nome do beneficiário.');
+    expect((await novo({ nome: '   ' })).status).toBe(400);
+    expect((await novo({ data_emissao: hoje, validade: somarDias(hoje, -1) })).status).toBe(400);
+    expect((await novo({ data_emissao: somarDias(hoje, 1) })).status).toBe(400);
+    const { corpo } = await novo({ data_emissao: somarDias(hoje, -10), validade: somarDias(hoje, -1) });
+    const lista = (await api('GET', `/vouchers?de=${somarDias(hoje, -10)}&ate=${somarDias(hoje, -10)}`)).corpo as Voucher[];
+    expect(lista.find((item) => item.id === corpo.id)?.situacao).toBe('vencido');
+    expect((await api('PATCH', `/vouchers/${corpo.id}`, { validade: hoje })).corpo.situacao).toBe('disponivel');
+  });
+
+  it('o admin vê e cadastra só nas unidades vinculadas; o colaborador não acessa', async () => {
+    const [minha, outra] = [unidades[0].id, unidades[1].id];
+    const tokenAdmin = await admin('gerente-vouchers@cofre.test', [minha]);
+    const daOutra = (await novo({ unidade_id: outra })).corpo as Voucher;
+    expect((await api('POST', '/vouchers', { unidade_id: outra, valor: 30, email: 'x@exemplo.com', nome: 'X' }, tokenAdmin)).status).toBe(403);
+    expect((await api('POST', '/vouchers', { unidade_id: minha, valor: 30, email: 'x@exemplo.com', nome: 'X' }, tokenAdmin)).status).toBe(201);
+    const vistos = (await api('GET', '/vouchers', undefined, tokenAdmin)).corpo as Voucher[];
+    expect(vistos.length).toBeGreaterThan(0);
+    expect(vistos.every((item) => item.unidade_id === minha)).toBe(true);
+    expect((await api('GET', `/vouchers/${daOutra.id}`, undefined, tokenAdmin)).status).toBe(403);
+    await api('POST', '/auth/register', { nome: 'Operador', email: 'operador-vouchers@cofre.test', senha, confirmacao: senha });
+    const tokenColaborador = (await api('POST', '/auth/login', { email: 'operador-vouchers@cofre.test', senha })).corpo.token;
+    expect((await api('GET', '/vouchers', undefined, tokenColaborador)).status).toBe(403);
+  });
+
+  it('edita, cancela com motivo e só o dono reativa, tudo na auditoria', async () => {
+    const tokenAdmin = await admin('gerente-cancela@cofre.test', [unidades[0].id]);
+    const { corpo } = await novo();
+    expect((await api('PATCH', `/vouchers/${corpo.id}`, { valor: 80, nome: 'Bruna de Oliveira' })).corpo).toMatchObject({ valor: 80, nome: 'Bruna de Oliveira' });
+    expect((await api('PATCH', `/vouchers/${corpo.id}`, {})).status).toBe(400);
+    expect((await api('DELETE', `/vouchers/${corpo.id}`, {}, tokenAdmin)).status).toBe(400);
+    expect((await api('DELETE', `/vouchers/${corpo.id}`, { motivo: 'cliente desistiu' }, tokenAdmin)).corpo.situacao).toBe('cancelado');
+    expect((await api('PATCH', `/vouchers/${corpo.id}`, { valor: 90 })).status).toBe(409);
+    expect((await api('POST', `/vouchers/${corpo.id}/reativar`, undefined, tokenAdmin)).status).toBe(403);
+    expect((await api('POST', `/vouchers/${corpo.id}/reativar`)).corpo).toMatchObject({ situacao: 'disponivel', motivo_cancelamento: null });
+    const doVoucher = ((await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`)).corpo as { entidade: string; entidade_id: number; acao: string; alteracoes: { campo: string; de: string | null; para: string | null }[] }[]).filter((item) => item.entidade === 'voucher' && item.entidade_id === corpo.id).reverse();
+    expect(doVoucher.map((item) => item.acao)).toEqual(['Criou', 'Alterou', 'Cancelou', 'Reativou']);
+    expect(doVoucher[1].alteracoes).toContainEqual({ campo: 'Beneficiário', de: 'Cliente da Sala', para: 'Bruna de Oliveira' });
+    expect(doVoucher[2].alteracoes).toContainEqual({ campo: 'Motivo do cancelamento', de: '—', para: 'cliente desistiu' });
+  });
+
+  it('o PDF recebe endereço, telefone e regras da unidade; unidade nova já vem com as regras padrão', async () => {
+    const unidade = (await api('POST', '/unidades', { nome: 'COM VOUCHER' })).corpo;
+    expect(unidade.regras_voucher).toMatch(/^Utilização para todos os dias\./);
+    await api('PATCH', `/unidades/${unidade.id}`, { endereco: 'Avenida Aurora Forti Neves, 579', telefone: '(17) 3281-8092', regras_voucher: ' Só no almoço. \n\n Sem troco. ' });
+    const { corpo } = await novo({ unidade_id: unidade.id });
+    expect((await api('GET', `/vouchers/${corpo.id}`)).corpo).toMatchObject({ unidade_endereco: 'Avenida Aurora Forti Neves, 579', unidade_telefone: '(17) 3281-8092', regras_voucher: 'Só no almoço.\nSem troco.' });
+    expect((await api('PATCH', `/unidades/${unidade.id}`, { endereco: '' })).corpo.endereco).toBeNull();
+  });
+});
