@@ -59,11 +59,12 @@ export function fotoCaixa(id: number): Foto | null {
   return { descricao: `Caixa #${id} · ${f.unidade} · ${turnoBr(f.turno)} de ${diaBr(f.data_caixa)}`, unidadeId: f.unidade_id, campos };
 }
 
-// lançamento manual do cofre; a transferência é uma alteração só (id da ponta de origem), com origem e destino
+// lançamento manual do cofre, com as cédulas; a transferência é uma alteração só (id da ponta de origem), com origem e destino
 export function fotoMovimentacao(id: number): Foto | null {
   const m = db.prepare('SELECT m.*, u.nome unidade FROM cofre_movimentacoes m JOIN unidades u ON u.id=m.unidade_id WHERE m.id=?').get(id) as { tipo: string; valor: number; data: string; observacao: string | null; ativo: number; transferencia_id: number | null; unidade_id: number; unidade: string } | undefined;
   if (!m) return null;
-  const comum = { Data: diaBr(m.data), Observação: m.observacao || '—', Situação: m.ativo ? 'Ativa' : 'Excluída' };
+  const cedulas = (db.prepare('SELECT denominacao, quantidade FROM cofre_cedulas WHERE movimentacao_id=? ORDER BY denominacao DESC').all(id) as { denominacao: number; quantidade: number }[]).map((c) => `${c.quantidade.toLocaleString('pt-BR')} × ${brl(c.denominacao)}`);
+  const comum = { Cédulas: cedulas.join('; ') || '—', Data: diaBr(m.data), Observação: m.observacao || '—', Situação: m.ativo ? 'Ativa' : 'Excluída' };
   if (m.transferencia_id) {
     const destino = db.prepare('SELECT u.nome FROM cofre_movimentacoes m JOIN unidades u ON u.id=m.unidade_id WHERE m.transferencia_id=? AND m.id<>?').get(m.transferencia_id, m.transferencia_id) as { nome: string } | undefined;
     return { descricao: `Transferência de ${m.unidade} para ${destino?.nome ?? '—'}`, unidadeId: m.unidade_id, campos: { Tipo: tiposCofre.transferencia, Origem: m.unidade, Destino: destino?.nome ?? '—', Valor: brl(Math.abs(m.valor)), ...comum } };

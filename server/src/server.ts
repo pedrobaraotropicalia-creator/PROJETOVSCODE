@@ -77,13 +77,18 @@ const unidadeSchema = z.object({ nome: nomeUnidadeSchema.optional(), troco_conti
 const diaAteHoje = dia.refine((data) => data <= hoje(), 'A data não pode ser futura.');
 const unidadesFiltroSchema = z.string({ error: 'Unidades inválidas.' }).regex(/^[1-9]\d*(,[1-9]\d*)*$/, 'Unidades inválidas.').optional().transform((value) => value ? [...new Set(value.split(',').map(Number))] : []);
 const observacaoCofreSchema = z.string().trim().max(limites.observacaoCofre, `A observação deve ter no máximo ${limites.observacaoCofre} caracteres.`).optional().transform((texto) => texto || null);
-const valorCofreSchema = z.number({ error: 'Informe o valor.' }).positive('O valor deve ser maior que zero.').max(limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`).transform(centavos);
+const somaCedulas = (itens: { denominacao: number; quantidade: number }[]) => centavos(itens.reduce((soma, item) => soma + item.denominacao * item.quantidade, 0));
+// cédulas e moedas do lançamento (as de quantidade zero ficam de fora); o valor do lançamento é a soma delas
+const cedulasCofreSchema = contagensSchema.transform((itens) => itens.filter((item) => item.quantidade > 0))
+  .refine((itens) => itens.length > 0, 'Informe a quantidade das cédulas e moedas.')
+  .refine((itens) => new Set(itens.map((item) => item.denominacao)).size === itens.length, 'Cédula ou moeda repetida.')
+  .refine((itens) => somaCedulas(itens) <= limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`);
 // sinal de cada tipo lançado à mão; ajuste e outros vão para os dois lados, conforme o sentido informado
 const sinalCofre = { deposito_banco: -1, pagamento_fornecedor: -1, retirada_dono: -1, aporte: 1, ajuste: 0, outros: 0 } as const;
-const movimentacaoCofreSchema = z.object({ unidade_id: z.number({ error: 'Informe a unidade.' }).int().positive('Informe a unidade.'), tipo: z.enum(Object.keys(sinalCofre) as [keyof typeof sinalCofre], 'Tipo de movimentação inválido.'), sentido: z.enum(['entrada', 'saida'], 'Informe se o dinheiro entra ou sai.').optional(), valor: valorCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema })
+const movimentacaoCofreSchema = z.object({ unidade_id: z.number({ error: 'Informe a unidade.' }).int().positive('Informe a unidade.'), tipo: z.enum(Object.keys(sinalCofre) as [keyof typeof sinalCofre], 'Tipo de movimentação inválido.'), sentido: z.enum(['entrada', 'saida'], 'Informe se o dinheiro entra ou sai.').optional(), cedulas: cedulasCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema })
   .refine((mov) => sinalCofre[mov.tipo] !== 0 || mov.sentido, 'Informe se o dinheiro entra ou sai.')
   .refine((mov) => sinalCofre[mov.tipo] !== 0 || mov.observacao, 'Informe a observação.');
-const transferenciaCofreSchema = z.object({ origem: z.number({ error: 'Informe a unidade de origem.' }).int().positive('Informe a unidade de origem.'), destino: z.number({ error: 'Informe a unidade de destino.' }).int().positive('Informe a unidade de destino.'), valor: valorCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema })
+const transferenciaCofreSchema = z.object({ origem: z.number({ error: 'Informe a unidade de origem.' }).int().positive('Informe a unidade de origem.'), destino: z.number({ error: 'Informe a unidade de destino.' }).int().positive('Informe a unidade de destino.'), cedulas: cedulasCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema })
   .refine((transferencia) => transferencia.origem !== transferencia.destino, 'A origem e o destino precisam ser unidades diferentes.');
 const tiposCofre = ['envio_caixa', 'retirada_troco', 'transferencia', ...Object.keys(sinalCofre)] as const;
 const extratoCofreSchema = z.object({ de: dia.optional(), ate: dia.optional(), unidades: unidadesFiltroSchema, tipo: z.enum(tiposCofre, 'Tipo de movimentação inválido.').optional(), excluidas: z.enum(['1']).optional() });
@@ -115,7 +120,11 @@ const salvarContagens = (id: number, etapa: 'abertura' | 'fechamento', contagens
   const insert = db.prepare('INSERT INTO contagens_dinheiro (fechamento_id,etapa,denominacao,quantidade,total) VALUES (?,?,?,?,?)');
   const itens = contagens.filter((item) => item.quantidade > 0);
   itens.forEach((item) => insert.run(id, etapa, item.denominacao, item.quantidade, centavos(item.denominacao * item.quantidade)));
-  return itens.reduce((sum, item) => sum + item.denominacao * item.quantidade, 0);
+  return somaCedulas(itens);
+};
+const salvarCedulasCofre = (movimentacaoId: number, cedulas: z.infer<typeof cedulasCofreSchema>) => {
+  const insert = db.prepare('INSERT INTO cofre_cedulas (movimentacao_id,denominacao,quantidade) VALUES (?,?,?)');
+  cedulas.forEach((item) => insert.run(movimentacaoId, item.denominacao, item.quantidade));
 };
 // dono e admin sem cargo Caixa podem abrir caixa com data diferente de hoje
 const escolheDataCaixa = (user: User) => user.tipo === 'dono' || (user.tipo === 'admin' && !isCaixaOnly(user));
@@ -274,11 +283,20 @@ app.post('/api/fechamentos/:id/finalizar', auth, (req: RequestWithUser, res) => 
 app.post('/api/fechamentos/:id/conferir', auth, allow('dono'), (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT status FROM fechamentos WHERE id=?').get(req.params.id) as { status: string } | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (fechamento.status === 'aberto') return res.status(409).json({ erro: 'Finalize o caixa antes de conferir.' }); const resolved = req.body?.problema_resolvido === true ? 1 : req.body?.problema_resolvido === false ? 0 : null; const unmark = req.body?.desmarcar === true; const antes = fotoCaixa(Number(req.params.id)); db.prepare("UPDATE fechamentos SET status=?, problema_resolvido=?, conferido_por=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(unmark ? 'finalizado' : 'conferido', unmark ? null : resolved, unmark ? null : req.user!.id, req.params.id); registrar(req.user!.id, 'caixa', Number(req.params.id), unmark ? 'Desfez a conferência' : 'Conferiu', antes, fotoCaixa(Number(req.params.id))); res.json({ mensagem: unmark ? 'Conferência desmarcada.' : 'Caixa conferido com sucesso.' }); });
 app.post('/api/fechamentos/:id/reabrir', auth, (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT usuario_id,status FROM fechamentos WHERE id=?').get(req.params.id) as Fechamento | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (!podeEditar(req.user!, fechamento)) return res.status(403).json({ erro: 'Você só pode editar seus próprios caixas.' }); if (req.user?.tipo === 'funcionario' && fechamento.status === 'conferido') return res.status(403).json({ erro: 'Este caixa já foi conferido pelo dono e não pode mais ser editado.' }); const antes = fotoCaixa(Number(req.params.id)); db.prepare("UPDATE fechamentos SET status='aberto', problema_resolvido=NULL, conferido_por=NULL, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id); registrar(req.user!.id, 'caixa', Number(req.params.id), 'Reabriu', antes, fotoCaixa(Number(req.params.id))); res.json({ mensagem: 'Caixa reaberto para edição.' }); });
 app.delete('/api/fechamentos/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const antes = fotoCaixa(Number(req.params.id)); const result = db.prepare('DELETE FROM fechamentos WHERE id=?').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); registrar(req.user!.id, 'caixa', Number(req.params.id), 'Excluiu', antes, null); res.json({ mensagem: 'Caixa excluído com sucesso.' }); });
-// Cofre (só o dono). Total = soma do extrato; o fundo na gaveta é o saldo inicial dos caixas abertos que vão movimentar o cofre ao finalizar
-app.get('/api/cofre', auth, allow('dono'), (_, res) => res.json(db.prepare(`SELECT u.id unidade_id, u.nome,
-    ROUND(COALESCE((SELECT SUM(e.valor) FROM cofre_extrato e WHERE e.unidade_id=u.id AND e.ativo=1), 0), 2) total,
-    ROUND(COALESCE((SELECT SUM(f.saldo_inicial) FROM fechamentos f WHERE f.unidade_id=u.id AND f.status='aberto' AND (f.movimenta_cofre=1 OR f.finalizado_em IS NULL)), 0), 2) fundo_gaveta
-  FROM unidades u WHERE u.ativo=1 ORDER BY u.nome`).all()));
+// Cofre (só o dono). Total = soma do extrato; o fundo na gaveta é o saldo inicial dos caixas abertos que vão movimentar o cofre ao finalizar.
+// As cédulas seguem a mesma divisão: as do extrato (cofre_extrato_cedulas) somam o total e as da abertura desses caixas, o fundo na gaveta
+const naGaveta = "f.status='aberto' AND (f.movimenta_cofre=1 OR f.finalizado_em IS NULL)";
+type CedulaUnidade = { unidade_id: number; denominacao: number; quantidade: number };
+app.get('/api/cofre', auth, allow('dono'), (_, res) => {
+  const saldos = db.prepare(`SELECT u.id unidade_id, u.nome,
+      ROUND(COALESCE((SELECT SUM(e.valor) FROM cofre_extrato e WHERE e.unidade_id=u.id AND e.ativo=1), 0), 2) total,
+      ROUND(COALESCE((SELECT SUM(f.saldo_inicial) FROM fechamentos f WHERE f.unidade_id=u.id AND ${naGaveta}), 0), 2) fundo_gaveta
+    FROM unidades u WHERE u.ativo=1 ORDER BY u.nome`).all() as { unidade_id: number }[];
+  const doTotal = db.prepare('SELECT unidade_id, denominacao, SUM(quantidade) quantidade FROM cofre_extrato_cedulas WHERE ativo=1 GROUP BY unidade_id, denominacao HAVING SUM(quantidade)<>0 ORDER BY denominacao DESC').all() as CedulaUnidade[];
+  const daGaveta = db.prepare(`SELECT f.unidade_id, c.denominacao, SUM(c.quantidade) quantidade FROM contagens_dinheiro c JOIN fechamentos f ON f.id=c.fechamento_id WHERE c.etapa='abertura' AND c.quantidade<>0 AND ${naGaveta} GROUP BY f.unidade_id, c.denominacao ORDER BY c.denominacao DESC`).all() as CedulaUnidade[];
+  const daUnidade = (linhas: CedulaUnidade[], unidadeId: number) => linhas.filter((linha) => linha.unidade_id === unidadeId).map(({ denominacao, quantidade }) => ({ denominacao, quantidade }));
+  res.json(saldos.map((saldo) => ({ ...saldo, cedulas: daUnidade(doTotal, saldo.unidade_id), cedulas_gaveta: daUnidade(daGaveta, saldo.unidade_id) })));
+});
 app.get('/api/cofre/movimentacoes', auth, allow('dono'), (req, res) => {
   const { de, ate, unidades, tipo, excluidas } = extratoCofreSchema.parse(req.query);
   const where: string[] = []; const params: unknown[] = [];
@@ -290,28 +308,36 @@ app.get('/api/cofre/movimentacoes', auth, allow('dono'), (req, res) => {
   const movimentacoes = db.prepare(`SELECT e.*, u.nome unidade_nome, usr.nome usuario_nome, exc.nome excluido_por_nome, f.turno,
       (SELECT u2.nome FROM cofre_movimentacoes m2 JOIN unidades u2 ON u2.id=m2.unidade_id WHERE m2.transferencia_id=e.transferencia_id AND m2.id<>e.movimentacao_id) contraparte_nome
     FROM cofre_extrato e JOIN unidades u ON u.id=e.unidade_id JOIN usuarios usr ON usr.id=e.usuario_id LEFT JOIN usuarios exc ON exc.id=e.excluido_por LEFT JOIN fechamentos f ON f.id=e.fechamento_id
-    WHERE ${excluidas ? '1=1' : 'e.ativo=1'}${filtro} ORDER BY e.data DESC, e.criado_em DESC, e.chave DESC`).all(...params);
+    WHERE ${excluidas ? '1=1' : 'e.ativo=1'}${filtro} ORDER BY e.data DESC, e.criado_em DESC, e.chave DESC`).all(...params) as { chave: string }[];
+  // cédulas de cada linha, sem sinal (o sentido é o do valor); lançamentos anteriores às cédulas e caixas sem contagem vêm sem
+  const cedulas = new Map<string, { denominacao: number; quantidade: number }[]>();
+  for (const { chave, ...cedula } of db.prepare(`SELECT e.chave, e.denominacao, ABS(e.quantidade) quantidade FROM cofre_extrato_cedulas e WHERE ${excluidas ? '1=1' : 'e.ativo=1'}${filtro} ORDER BY e.denominacao DESC`).all(...params) as { chave: string; denominacao: number; quantidade: number }[]) cedulas.set(chave, [...(cedulas.get(chave) ?? []), cedula]);
   const totais = db.prepare(`SELECT e.tipo, ROUND(SUM(CASE WHEN e.valor > 0 THEN e.valor ELSE 0 END), 2) entradas, ROUND(SUM(CASE WHEN e.valor < 0 THEN -e.valor ELSE 0 END), 2) saidas
     FROM cofre_extrato e WHERE e.ativo=1${filtro} GROUP BY e.tipo`).all(...params);
-  res.json({ movimentacoes, totais });
+  res.json({ movimentacoes: movimentacoes.map((mov) => ({ ...mov, cedulas: cedulas.get(mov.chave) ?? [] })), totais });
 });
 app.post('/api/cofre/movimentacoes', auth, allow('dono'), (req: RequestWithUser, res) => {
-  const { unidade_id, tipo, sentido, valor, data, observacao } = movimentacaoCofreSchema.parse(req.body);
+  const { unidade_id, tipo, sentido, cedulas, data, observacao } = movimentacaoCofreSchema.parse(req.body);
   if (!unidadeAtiva(unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
   const sinal = sinalCofre[tipo] || (sentido === 'entrada' ? 1 : -1);
-  const result = db.prepare('INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id) VALUES (?,?,?,?,?,?)').run(unidade_id, tipo, sinal * valor, data, observacao, req.user!.id);
-  const id = Number(result.lastInsertRowid);
+  const id = db.transaction(() => {
+    const novoId = Number(db.prepare('INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id) VALUES (?,?,?,?,?,?)').run(unidade_id, tipo, sinal * somaCedulas(cedulas), data, observacao, req.user!.id).lastInsertRowid);
+    salvarCedulasCofre(novoId, cedulas);
+    return novoId;
+  })();
   registrar(req.user!.id, 'cofre', id, 'Criou', null, fotoMovimentacao(id));
   res.status(201).json({ id, mensagem: 'Movimentação lançada.' });
 });
 app.post('/api/cofre/transferencias', auth, allow('dono'), (req: RequestWithUser, res) => {
-  const { origem, destino, valor, data, observacao } = transferenciaCofreSchema.parse(req.body);
+  const { origem, destino, cedulas, data, observacao } = transferenciaCofreSchema.parse(req.body);
   if (!unidadeAtiva(origem) || !unidadeAtiva(destino)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
+  const valor = somaCedulas(cedulas);
   const id = db.transaction(() => {
     const insert = db.prepare("INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id,transferencia_id) VALUES (?,'transferencia',?,?,?,?,?)");
     const origemId = Number(insert.run(origem, -valor, data, observacao, req.user!.id, null).lastInsertRowid);
     db.prepare('UPDATE cofre_movimentacoes SET transferencia_id=? WHERE id=?').run(origemId, origemId);
-    insert.run(destino, valor, data, observacao, req.user!.id, origemId);
+    const destinoId = Number(insert.run(destino, valor, data, observacao, req.user!.id, origemId).lastInsertRowid);
+    salvarCedulasCofre(origemId, cedulas); salvarCedulasCofre(destinoId, cedulas);
     return origemId;
   })();
   registrar(req.user!.id, 'cofre', id, 'Criou', null, fotoMovimentacao(id));

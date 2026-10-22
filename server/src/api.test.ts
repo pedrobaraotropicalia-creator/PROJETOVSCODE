@@ -40,12 +40,13 @@ async function caixa(unidadeId: number, saldoInicial: number, contado: number, o
   if (opcoes.finalizar !== false) await api('POST', `/fechamentos/${corpo.id}/finalizar`);
   return corpo.id as number;
 }
+type Cedula = { denominacao: number; quantidade: number };
 async function saldo(unidadeId: number) {
   const { corpo } = await api('GET', '/cofre');
-  return corpo.find((item: { unidade_id: number }) => item.unidade_id === unidadeId) as { total: number; fundo_gaveta: number };
+  return corpo.find((item: { unidade_id: number }) => item.unidade_id === unidadeId) as { total: number; fundo_gaveta: number; cedulas: Cedula[]; cedulas_gaveta: Cedula[] };
 }
 async function extrato(filtro = '') {
-  return (await api('GET', `/cofre/movimentacoes${filtro}`)).corpo as { movimentacoes: { tipo: string; valor: number; unidade_id: number; movimentacao_id: number | null; ativo: number }[]; totais: { tipo: string; entradas: number; saidas: number }[] };
+  return (await api('GET', `/cofre/movimentacoes${filtro}`)).corpo as { movimentacoes: { tipo: string; valor: number; unidade_id: number; movimentacao_id: number | null; ativo: number; cedulas: Cedula[] }[]; totais: { tipo: string; entradas: number; saidas: number }[] };
 }
 
 beforeAll(async () => {
@@ -142,33 +143,33 @@ describe('cofre', () => {
 
   it('lança saídas e entradas manuais com o sinal do tipo e permite saldo negativo', async () => {
     const unidade = (await api('POST', '/unidades', { nome: 'COFRE MANUAL' })).corpo.id;
-    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'deposito_banco', valor: 1000, data: hoje })).status).toBe(201);
+    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'deposito_banco', cedulas: notas(1000), data: hoje })).status).toBe(201);
     expect((await saldo(unidade)).total).toBe(-1000);
-    await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', valor: 300, data: hoje });
-    await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'ajuste', sentido: 'entrada', valor: 700, data: hoje, observacao: 'saldo inicial' });
+    await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', cedulas: notas(300), data: hoje });
+    await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'ajuste', sentido: 'entrada', cedulas: notas(700), data: hoje, observacao: 'saldo inicial' });
     expect((await saldo(unidade)).total).toBe(0);
   });
 
   it('exige sentido e observação no ajuste e recusa data futura', async () => {
     const unidade = unidades[0].id;
-    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'ajuste', valor: 10, data: hoje, observacao: 'x' })).status).toBe(400);
-    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'outros', sentido: 'saida', valor: 10, data: hoje })).status).toBe(400);
-    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', valor: 10, data: '2999-01-01' })).status).toBe(400);
+    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'ajuste', cedulas: notas(10), data: hoje, observacao: 'x' })).status).toBe(400);
+    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'outros', sentido: 'saida', cedulas: notas(10), data: hoje })).status).toBe(400);
+    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', cedulas: notas(10), data: '2999-01-01' })).status).toBe(400);
   });
 
   it('transfere entre unidades e a exclusão remove as duas pontas', async () => {
     const [origem, destino] = [unidades[1].id, unidades[2].id];
     const antes = [(await saldo(origem)).total, (await saldo(destino)).total];
-    const { corpo } = await api('POST', '/cofre/transferencias', { origem, destino, valor: 250, data: hoje });
+    const { corpo } = await api('POST', '/cofre/transferencias', { origem, destino, cedulas: notas(250), data: hoje });
     expect([(await saldo(origem)).total, (await saldo(destino)).total]).toEqual([antes[0] - 250, antes[1] + 250]);
     expect((await api('DELETE', `/cofre/movimentacoes/${corpo.id}`)).status).toBe(200);
     expect([(await saldo(origem)).total, (await saldo(destino)).total]).toEqual(antes);
-    expect((await api('POST', '/cofre/transferencias', { origem, destino: origem, valor: 1, data: hoje })).status).toBe(400);
+    expect((await api('POST', '/cofre/transferencias', { origem, destino: origem, cedulas: notas(1), data: hoje })).status).toBe(400);
   });
 
   it('tira a movimentação excluída do saldo e dos totais e só a mostra quando pedido', async () => {
     const unidade = (await api('POST', '/unidades', { nome: 'COFRE EXCLUSAO' })).corpo.id;
-    const { corpo } = await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'retirada_dono', valor: 80, data: hoje });
+    const { corpo } = await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'retirada_dono', cedulas: notas(80), data: hoje });
     await api('DELETE', `/cofre/movimentacoes/${corpo.id}`);
     expect((await saldo(unidade)).total).toBe(0);
     expect((await extrato(`?unidades=${unidade}`)).movimentacoes).toEqual([]);
@@ -178,9 +179,51 @@ describe('cofre', () => {
 
   it('separa entradas e saídas nos totais por tipo', async () => {
     const [origem, destino] = [unidades[0].id, unidades[3].id];
-    await api('POST', '/cofre/transferencias', { origem, destino, valor: 40, data: '2026-02-02' });
+    await api('POST', '/cofre/transferencias', { origem, destino, cedulas: notas(40), data: '2026-02-02' });
     const { totais } = await extrato('?de=2026-02-02&ate=2026-02-02');
     expect(totais).toEqual([{ tipo: 'transferencia', entradas: 40, saidas: 40 }]);
+  });
+
+  it('lança pelas cédulas: o valor é a soma delas, e o extrato e o saldo trazem o detalhe', async () => {
+    const unidade = (await api('POST', '/unidades', { nome: 'COFRE CEDULAS' })).corpo.id;
+    const lancar = (tipo: string, cedulas: unknown) => api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo, cedulas, data: hoje });
+    expect((await lancar('aporte', [{ denominacao: 100, quantidade: 2 }, { denominacao: 50, quantidade: 0 }, { denominacao: 0.25, quantidade: 4 }])).status).toBe(201);
+    await lancar('deposito_banco', [{ denominacao: 100, quantidade: 1 }]);
+    expect(await saldo(unidade)).toMatchObject({ total: 101, cedulas: [{ denominacao: 100, quantidade: 1 }, { denominacao: 0.25, quantidade: 4 }], cedulas_gaveta: [] });
+    const { movimentacoes } = await extrato(`?unidades=${unidade}`);
+    expect(movimentacoes.find((mov) => mov.tipo === 'aporte')).toMatchObject({ valor: 201, cedulas: [{ denominacao: 100, quantidade: 2 }, { denominacao: 0.25, quantidade: 4 }] });
+    expect(movimentacoes.find((mov) => mov.tipo === 'deposito_banco')).toMatchObject({ valor: -100, cedulas: [{ denominacao: 100, quantidade: 1 }] });
+  });
+
+  it('recusa lançamento sem cédulas, com cédula repetida ou inexistente', async () => {
+    const lancar = (corpo: object) => api('POST', '/cofre/movimentacoes', { unidade_id: unidades[0].id, tipo: 'aporte', data: hoje, ...corpo });
+    expect((await lancar({ cedulas: [{ denominacao: 10, quantidade: 0 }] })).corpo.erro).toBe('Informe a quantidade das cédulas e moedas.');
+    expect((await lancar({ cedulas: [{ denominacao: 10, quantidade: 1 }, { denominacao: 10, quantidade: 2 }] })).corpo.erro).toBe('Cédula ou moeda repetida.');
+    expect((await lancar({ cedulas: [{ denominacao: 3, quantidade: 1 }] })).status).toBe(400);
+    expect((await lancar({ valor: 10 })).status).toBe(400);
+  });
+
+  it('detalha as cédulas dos caixas no extrato e separa as da gaveta no saldo', async () => {
+    const unidade = (await api('POST', '/unidades', { nome: 'COFRE GAVETA' })).corpo.id;
+    const { corpo } = await api('POST', '/fechamentos', { unidade_id: unidade, turno: 'ALMOÇO', contagens: [{ denominacao: 10, quantidade: 5 }] });
+    await api('PUT', `/fechamentos/${corpo.id}/contagem-final`, { contagens: [{ denominacao: 50, quantidade: 3 }, { denominacao: 10, quantidade: 2 }] });
+    await api('POST', `/fechamentos/${corpo.id}/finalizar`);
+    await api('POST', '/fechamentos', { unidade_id: unidade, turno: 'JANTAR', contagens: [{ denominacao: 5, quantidade: 4 }] });
+    expect(await saldo(unidade)).toMatchObject({ total: 120, fundo_gaveta: 20, cedulas: [{ denominacao: 50, quantidade: 3 }, { denominacao: 10, quantidade: -3 }], cedulas_gaveta: [{ denominacao: 5, quantidade: 4 }] });
+    const { movimentacoes } = await extrato(`?unidades=${unidade}`);
+    expect(movimentacoes.find((mov) => mov.tipo === 'envio_caixa')?.cedulas).toEqual([{ denominacao: 50, quantidade: 3 }, { denominacao: 10, quantidade: 2 }]);
+    expect(movimentacoes.find((mov) => mov.tipo === 'retirada_troco')?.cedulas).toEqual([{ denominacao: 10, quantidade: 5 }]);
+  });
+
+  it('transfere as cédulas informadas nas duas pontas e a exclusão as tira das duas', async () => {
+    const [origem, destino] = [(await api('POST', '/unidades', { nome: 'COFRE ORIGEM' })).corpo.id, (await api('POST', '/unidades', { nome: 'COFRE DESTINO' })).corpo.id];
+    const cedulas = [{ denominacao: 20, quantidade: 3 }];
+    const { corpo } = await api('POST', '/cofre/transferencias', { origem, destino, cedulas, data: hoje });
+    expect([(await saldo(origem)).cedulas, (await saldo(destino)).cedulas]).toEqual([[{ denominacao: 20, quantidade: -3 }], cedulas]);
+    expect((await extrato(`?unidades=${origem},${destino}`)).movimentacoes.map((mov) => mov.cedulas)).toEqual([cedulas, cedulas]);
+    await api('DELETE', `/cofre/movimentacoes/${corpo.id}`);
+    expect([(await saldo(origem)).cedulas, (await saldo(destino)).cedulas]).toEqual([[], []]);
+    expect((await extrato(`?unidades=${origem}&excluidas=1`)).movimentacoes).toMatchObject([{ ativo: 0, cedulas }]);
   });
 });
 
@@ -202,7 +245,7 @@ describe('dia do caixa', () => {
 describe('unidades excluídas', () => {
   it('voltam com o cofre intacto ao reativar e não podem ser recriadas pelo nome', async () => {
     const unidade = (await api('POST', '/unidades', { nome: 'REATIVAVEL' })).corpo.id;
-    await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', valor: 90, data: hoje });
+    await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', cedulas: notas(90), data: hoje });
     await api('DELETE', `/unidades/${unidade}`);
     expect((await api('GET', '/unidades/excluidas')).corpo.map((item: { id: number }) => item.id)).toContain(unidade);
     expect((await api('POST', '/unidades', { nome: 'REATIVAVEL' })).status).toBe(409);
@@ -404,6 +447,12 @@ describe('auditoria', () => {
     expect(doCaixa[3].alteracoes).toEqual([{ campo: 'Status', de: 'Finalizado', para: 'Conferido' }, { campo: 'Conferência', de: null, para: 'Certo' }]);
   });
 
+  it('o lançamento do cofre registra as cédulas', async () => {
+    const { corpo } = await api('POST', '/cofre/movimentacoes', { unidade_id: unidades[0].id, tipo: 'aporte', cedulas: [{ denominacao: 50, quantidade: 2 }, { denominacao: 0.5, quantidade: 3 }], data: hoje });
+    const registro = (await ultimas()).find((item) => item.entidade === 'cofre' && item.entidade_id === corpo.id);
+    expect(registro?.alteracoes).toContainEqual({ campo: 'Cédulas', de: null, para: `2 × ${brl(50)}; 3 × ${brl(0.5)}` });
+  });
+
   it('código novo e senha redefinida aparecem sem o valor', async () => {
     const { corpo } = await api('POST', '/usuarios', { nome: 'Auditado', email: 'auditado@cofre.test', tipo: 'funcionario', unidades: [] });
     await api('POST', `/usuarios/${corpo.usuario.id}/codigo-acesso`);
@@ -428,7 +477,7 @@ describe('auditoria', () => {
     await api('PATCH', `/usuarios/${corpo.usuario.id}`, { tipo: 'admin', unidades: [minha] });
     const tokenAdmin = (await api('POST', '/auth/login', { email: 'supervisora@cofre.test', senha })).corpo.token;
     const [daMinha, daOutra] = [await caixa(minha, 10, 10), await caixa(outra, 10, 10)];
-    await api('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', valor: 5, data: hoje });
+    await api('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', cedulas: notas(5), data: hoje });
     const visto = (await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`, undefined, tokenAdmin)).corpo as Registro[];
     expect(visto.some((item) => item.entidade === 'caixa' && item.entidade_id === daMinha)).toBe(true);
     expect(visto.some((item) => item.entidade === 'caixa' && item.entidade_id === daOutra)).toBe(false);
