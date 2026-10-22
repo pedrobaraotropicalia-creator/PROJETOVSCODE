@@ -20,19 +20,20 @@ type Detalhe = {
   saidas: { valor: number; motivo: string; motivo_id: number | null; observacao: string | null }[];
   contagens: Contagem[];
 };
-type Counts = Record<number, number | undefined>;
+export type Counts = Record<number, number | undefined>;
 
-const denominacoes = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
+export const denominacoes = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
 const etapas = ['Abertura', 'Entradas', 'Maquininhas', 'Saídas', 'Contagem final', 'Revisão'];
 
 const countsFrom = (data: { contagens: Contagem[] } | null, etapa: Contagem['etapa']) => Object.fromEntries((data?.contagens || []).filter((item) => item.etapa === etapa).map((item) => [item.denominacao, item.quantidade])) as Counts;
-const countsPayload = (counts: Counts) => denominacoes.map((denominacao) => ({ denominacao, quantidade: counts[denominacao] ?? 0 }));
+export const countsPayload = (counts: Counts) => denominacoes.map((denominacao) => ({ denominacao, quantidade: counts[denominacao] ?? 0 }));
 const stepsDone = (data: Detalhe) => [true, data.entradas.length > 0, data.maquininhas.length > 0, data.saidas.length > 0, data.contagens.some((item) => item.etapa === 'fechamento'), false];
 // saídas são opcionais: ao retomar um caixa, abre na primeira etapa obrigatória pendente ou na revisão
 const firstPendingStep = (data: Detalhe) => { const done = stepsDone(data); return [1, 2, 4].find((index) => !done[index]) ?? 5; };
-const countsTotal = (counts: Counts) => denominacoes.reduce((sum, denominacao) => sum + denominacao * (counts[denominacao] ?? 0), 0);
+export const countsTotal = (counts: Counts) => denominacoes.reduce((sum, denominacao) => sum + denominacao * (counts[denominacao] ?? 0), 0);
 
-function CountGrid({ variant, kicker, title, description, counts, onChange }: { variant: Contagem['etapa']; kicker: string; title: string; description: string; counts: Counts; onChange: (counts: Counts) => void }) {
+// grade de contagem de cédulas e moedas: abertura e contagem final do caixa e lançamentos do cofre (Cofre.tsx)
+export function CountGrid({ variant, kicker, title, description, counts, onChange }: { variant: Contagem['etapa']; kicker: string; title: string; description: string; counts: Counts; onChange: (counts: Counts) => void }) {
   return <div className={`cash-count-box ${variant === 'abertura' ? 'cash-opening' : 'cash-closing'}`}>
     <div className="cash-count-heading"><span className="cash-count-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div>
     {/* a linha entre notas e moedas ocupa a linha inteira da grade: as moedas começam numa linha nova em qualquer largura */}
