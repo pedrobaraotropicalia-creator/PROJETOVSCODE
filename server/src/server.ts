@@ -287,27 +287,30 @@ app.post('/api/fechamentos/:id/finalizar', auth, (req: RequestWithUser, res) => 
 app.post('/api/fechamentos/:id/conferir', auth, allow('dono'), (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT status FROM fechamentos WHERE id=?').get(req.params.id) as { status: string } | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (fechamento.status === 'aberto') return res.status(409).json({ erro: 'Finalize o caixa antes de conferir.' }); const resolved = req.body?.problema_resolvido === true ? 1 : req.body?.problema_resolvido === false ? 0 : null; const unmark = req.body?.desmarcar === true; const antes = fotoCaixa(Number(req.params.id)); db.prepare("UPDATE fechamentos SET status=?, problema_resolvido=?, conferido_por=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(unmark ? 'finalizado' : 'conferido', unmark ? null : resolved, unmark ? null : req.user!.id, req.params.id); registrar(req.user!.id, 'caixa', Number(req.params.id), unmark ? 'Desfez a conferência' : 'Conferiu', antes, fotoCaixa(Number(req.params.id))); res.json({ mensagem: unmark ? 'Conferência desmarcada.' : 'Caixa conferido com sucesso.' }); });
 app.post('/api/fechamentos/:id/reabrir', auth, (req: RequestWithUser, res) => { const fechamento = db.prepare('SELECT usuario_id,status FROM fechamentos WHERE id=?').get(req.params.id) as Fechamento | undefined; if (!fechamento) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); if (!podeEditar(req.user!, fechamento)) return res.status(403).json({ erro: 'Você só pode editar seus próprios caixas.' }); if (req.user?.tipo === 'funcionario' && fechamento.status === 'conferido') return res.status(403).json({ erro: 'Este caixa já foi conferido pelo dono e não pode mais ser editado.' }); const antes = fotoCaixa(Number(req.params.id)); db.prepare("UPDATE fechamentos SET status='aberto', problema_resolvido=NULL, conferido_por=NULL, atualizado_em=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id); registrar(req.user!.id, 'caixa', Number(req.params.id), 'Reabriu', antes, fotoCaixa(Number(req.params.id))); res.json({ mensagem: 'Caixa reaberto para edição.' }); });
 app.delete('/api/fechamentos/:id', auth, allow('dono'), (req: RequestWithUser, res) => { const antes = fotoCaixa(Number(req.params.id)); const result = db.prepare('DELETE FROM fechamentos WHERE id=?').run(req.params.id); if (!result.changes) return res.status(404).json({ erro: 'Fechamento não encontrado.' }); registrar(req.user!.id, 'caixa', Number(req.params.id), 'Excluiu', antes, null); res.json({ mensagem: 'Caixa excluído com sucesso.' }); });
-// Cofre (só o dono). Total = soma do extrato; o fundo na gaveta é o saldo inicial dos caixas abertos que vão movimentar o cofre ao finalizar.
+// Cofre (dono e admin sem cargo Caixa, o mesmo critério de quem confere; o admin só nas unidades vinculadas). Total = soma do extrato; o fundo na gaveta é o saldo inicial dos caixas abertos que vão movimentar o cofre ao finalizar.
 // As cédulas seguem a mesma divisão: as do extrato (cofre_extrato_cedulas) somam o total e as da abertura desses caixas, o fundo na gaveta
+const gereCofre = (req: RequestWithUser, res: express.Response, next: express.NextFunction) => req.user && conferente(req.user) ? next() : res.status(403).json({ erro: 'Você não tem permissão para esta ação.' });
 const naGaveta = "f.status='aberto' AND (f.movimenta_cofre=1 OR f.finalizado_em IS NULL)";
 type CedulaUnidade = { unidade_id: number; denominacao: number; quantidade: number };
-app.get('/api/cofre', auth, allow('dono'), (_, res) => {
+app.get('/api/cofre', auth, gereCofre, (req: RequestWithUser, res) => {
+  const doAdmin = req.user!.tipo === 'dono' ? '' : ' AND u.id IN (SELECT unidade_id FROM usuario_unidades WHERE usuario_id=?)';
   const saldos = db.prepare(`SELECT u.id unidade_id, u.nome,
       ROUND(COALESCE((SELECT SUM(e.valor) FROM cofre_extrato e WHERE e.unidade_id=u.id AND e.ativo=1), 0), 2) total,
       ROUND(COALESCE((SELECT SUM(f.saldo_inicial) FROM fechamentos f WHERE f.unidade_id=u.id AND ${naGaveta}), 0), 2) fundo_gaveta
-    FROM unidades u WHERE u.ativo=1 ORDER BY u.nome`).all() as { unidade_id: number }[];
+    FROM unidades u WHERE u.ativo=1${doAdmin} ORDER BY u.nome`).all(...(doAdmin ? [req.user!.id] : [])) as { unidade_id: number }[];
   const doTotal = db.prepare('SELECT unidade_id, denominacao, SUM(quantidade) quantidade FROM cofre_extrato_cedulas WHERE ativo=1 GROUP BY unidade_id, denominacao HAVING SUM(quantidade)<>0 ORDER BY denominacao DESC').all() as CedulaUnidade[];
   const daGaveta = db.prepare(`SELECT f.unidade_id, c.denominacao, SUM(c.quantidade) quantidade FROM contagens_dinheiro c JOIN fechamentos f ON f.id=c.fechamento_id WHERE c.etapa='abertura' AND c.quantidade<>0 AND ${naGaveta} GROUP BY f.unidade_id, c.denominacao ORDER BY c.denominacao DESC`).all() as CedulaUnidade[];
   const daUnidade = (linhas: CedulaUnidade[], unidadeId: number) => linhas.filter((linha) => linha.unidade_id === unidadeId).map(({ denominacao, quantidade }) => ({ denominacao, quantidade }));
   res.json(saldos.map((saldo) => ({ ...saldo, cedulas: daUnidade(doTotal, saldo.unidade_id), cedulas_gaveta: daUnidade(daGaveta, saldo.unidade_id) })));
 });
-app.get('/api/cofre/movimentacoes', auth, allow('dono'), (req, res) => {
+app.get('/api/cofre/movimentacoes', auth, gereCofre, (req: RequestWithUser, res) => {
   const { de, ate, unidades, tipo, excluidas } = extratoCofreSchema.parse(req.query);
   const where: string[] = []; const params: unknown[] = [];
   if (de) { where.push('e.data >= ?'); params.push(de); }
   if (ate) { where.push('e.data <= ?'); params.push(ate); }
   if (unidades.length) { where.push(`e.unidade_id IN (${unidades.map(() => '?').join(',')})`); params.push(...unidades); }
   if (tipo) { where.push('e.tipo = ?'); params.push(tipo); }
+  if (req.user!.tipo !== 'dono') { const vinculadas = unidadesVinculadas(req.user!.id); where.push(`e.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})`); params.push(...vinculadas); }
   const filtro = where.length ? ` AND ${where.join(' AND ')}` : '';
   const movimentacoes = db.prepare(`SELECT e.*, u.nome unidade_nome, usr.nome usuario_nome, exc.nome excluido_por_nome, f.turno,
       (SELECT u2.nome FROM cofre_movimentacoes m2 JOIN unidades u2 ON u2.id=m2.unidade_id WHERE m2.transferencia_id=e.transferencia_id AND m2.id<>e.movimentacao_id) contraparte_nome
@@ -320,9 +323,10 @@ app.get('/api/cofre/movimentacoes', auth, allow('dono'), (req, res) => {
     FROM cofre_extrato e WHERE e.ativo=1${filtro} GROUP BY e.tipo`).all(...params);
   res.json({ movimentacoes: movimentacoes.map((mov) => ({ ...mov, cedulas: cedulas.get(mov.chave) ?? [] })), totais });
 });
-app.post('/api/cofre/movimentacoes', auth, allow('dono'), (req: RequestWithUser, res) => {
+app.post('/api/cofre/movimentacoes', auth, gereCofre, (req: RequestWithUser, res) => {
   const { unidade_id, tipo, sentido, cedulas, data, observacao } = movimentacaoCofreSchema.parse(req.body);
   if (!unidadeAtiva(unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
+  if (!acessaUnidade(req.user!, unidade_id)) return res.status(403).json(semAcessoUnidade);
   const sinal = sinalCofre[tipo] || (sentido === 'entrada' ? 1 : -1);
   const id = db.transaction(() => {
     const novoId = Number(db.prepare('INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id) VALUES (?,?,?,?,?,?)').run(unidade_id, tipo, sinal * somaCedulas(cedulas), data, observacao, req.user!.id).lastInsertRowid);
@@ -332,9 +336,12 @@ app.post('/api/cofre/movimentacoes', auth, allow('dono'), (req: RequestWithUser,
   registrar(req.user!.id, 'cofre', id, 'Criou', null, fotoMovimentacao(id));
   res.status(201).json({ id, mensagem: 'Movimentação lançada.' });
 });
-app.post('/api/cofre/transferencias', auth, allow('dono'), (req: RequestWithUser, res) => {
+// o admin transfere só entre unidades vinculadas a ele, porque a transferência mexe no cofre das duas
+const semAcessoTransferencia = { erro: 'Você precisa estar vinculado às duas unidades da transferência.' };
+app.post('/api/cofre/transferencias', auth, gereCofre, (req: RequestWithUser, res) => {
   const { origem, destino, cedulas, data, observacao } = transferenciaCofreSchema.parse(req.body);
   if (!unidadeAtiva(origem) || !unidadeAtiva(destino)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
+  if (!acessaUnidade(req.user!, origem) || !acessaUnidade(req.user!, destino)) return res.status(403).json(semAcessoTransferencia);
   const valor = somaCedulas(cedulas);
   const id = db.transaction(() => {
     const insert = db.prepare("INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id,transferencia_id) VALUES (?,'transferencia',?,?,?,?,?)");
@@ -347,12 +354,15 @@ app.post('/api/cofre/transferencias', auth, allow('dono'), (req: RequestWithUser
   registrar(req.user!.id, 'cofre', id, 'Criou', null, fotoMovimentacao(id));
   res.status(201).json({ id, mensagem: 'Transferência lançada.' });
 });
-// exclusão lógica; numa transferência sai das duas unidades. Os caixas não aparecem aqui: mudam reabrindo ou excluindo o caixa
-app.delete('/api/cofre/movimentacoes/:id', auth, allow('dono'), (req: RequestWithUser, res) => {
+// exclusão lógica; numa transferência sai das duas unidades (o admin precisa estar vinculado às duas). Os caixas não aparecem aqui: mudam reabrindo ou excluindo o caixa
+app.delete('/api/cofre/movimentacoes/:id', auth, gereCofre, (req: RequestWithUser, res) => {
   const mov = db.prepare('SELECT id, transferencia_id FROM cofre_movimentacoes WHERE id=? AND ativo=1').get(req.params.id) as { id: number; transferencia_id: number | null } | undefined;
   if (!mov) return res.status(404).json({ erro: 'Movimentação não encontrada.' });
-  const alvo = mov.transferencia_id ?? mov.id; const antes = fotoMovimentacao(alvo);
-  db.prepare(`UPDATE cofre_movimentacoes SET ativo=0, excluido_por=?, excluido_em=CURRENT_TIMESTAMP WHERE ${mov.transferencia_id ? 'transferencia_id' : 'id'}=?`).run(req.user!.id, alvo);
+  const alvo = mov.transferencia_id ?? mov.id; const coluna = mov.transferencia_id ? 'transferencia_id' : 'id';
+  const pontas = db.prepare(`SELECT unidade_id FROM cofre_movimentacoes WHERE ${coluna}=?`).all(alvo) as { unidade_id: number }[];
+  if (!pontas.every((ponta) => acessaUnidade(req.user!, ponta.unidade_id))) return res.status(403).json(mov.transferencia_id ? semAcessoTransferencia : semAcessoUnidade);
+  const antes = fotoMovimentacao(alvo);
+  db.prepare(`UPDATE cofre_movimentacoes SET ativo=0, excluido_por=?, excluido_em=CURRENT_TIMESTAMP WHERE ${coluna}=?`).run(req.user!.id, alvo);
   registrar(req.user!.id, 'cofre', alvo, 'Excluiu', antes, fotoMovimentacao(alvo));
   res.json({ mensagem: 'Movimentação excluída.' });
 });
@@ -498,16 +508,16 @@ app.patch('/api/usuarios/:id/tipo', auth, allow('dono'), (req: RequestWithUser, 
 app.patch('/api/usuarios/:id', auth, allow('dono'), async (req: RequestWithUser, res) => { const id = Number(req.params.id); const target: any = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id); if (!target) return res.status(404).json({ erro: 'Usuário não encontrado.' }); const antes = fotoUsuario(id); const isOwnerAccount = target.email === adminEmail; const { nome, email, senha, cargo, tipo, unidades } = req.body || {}; const updates: string[] = []; const params: any[] = []; if (nome !== undefined) { updates.push('nome=?'); params.push(nomeUsuarioSchema.parse(nome)); } if (email !== undefined) { updates.push('email=?'); params.push(emailSchema.parse(email)); } if (senha) { updates.push('senha_hash=?', 'codigo_acesso=NULL'); params.push(await bcrypt.hash(senhaSchema.parse(senha), 10)); } // cargos fora da lista que já existiam continuam válidos para quem já os tem
 if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !nomesCargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : unidadesUsuarioSchema.parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => salvarVinculos(id, novasUnidades))(); registrar(req.user!.id, 'usuario', id, 'Alterou', antes, fotoUsuario(id), senha ? [{ campo: 'Senha', de: null, para: 'redefinida pelo dono' }] : []); res.json({ usuario: lerUsuario(id) }); });
 // auditoria: as alterações do período pelo dia de Brasília, mais recentes primeiro; o de/para vem pronto de auditoria.ts.
-// O dono vê tudo; o admin, o que já enxerga no sistema: sem o cofre (só do dono), caixas, maquininhas, unidades e vouchers só das unidades
-// vinculadas, usuários e motivos todos; com cargo Caixa, só os caixas que ele mesmo alterou
+// O dono vê tudo; o admin, o que já enxerga no sistema: caixas, maquininhas, unidades, vouchers e cofre só das unidades vinculadas
+// (a transferência do cofre, gravada na origem, também pelo destino), usuários e motivos todos; com cargo Caixa, só os caixas que ele mesmo alterou e nada do cofre
 const auditoriaSchema = z.object({ de: dia, ate: dia }).refine((filtro) => filtro.de <= filtro.ate, 'A data inicial é depois da final.');
 app.get('/api/auditoria', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
   const { de, ate } = auditoriaSchema.parse(req.query);
   const where = ["date(a.criado_em, '-3 hours') BETWEEN ? AND ?"]; const params: unknown[] = [de, ate];
   if (req.user!.tipo !== 'dono') {
-    const vinculadas = unidadesVinculadas(req.user!.id);
-    where.push(`(a.entidade IN ('usuario', 'motivo') OR (a.entidade IN ('caixa', 'maquininha', 'unidade', 'voucher') AND a.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})))`); params.push(...vinculadas);
-    if (isCaixaOnly(req.user)) { where.push("(a.entidade <> 'caixa' OR a.usuario_id = ?)"); params.push(req.user!.id); }
+    const vinculadas = unidadesVinculadas(req.user!.id); const nasVinculadas = `IN (${vinculadas.map(() => '?').join(',') || 'NULL'})`;
+    where.push(`(a.entidade IN ('usuario', 'motivo') OR (a.entidade IN ('caixa', 'maquininha', 'unidade', 'voucher', 'cofre') AND a.unidade_id ${nasVinculadas}) OR (a.entidade = 'cofre' AND EXISTS (SELECT 1 FROM cofre_movimentacoes m WHERE m.transferencia_id = a.entidade_id AND m.unidade_id ${nasVinculadas})))`); params.push(...vinculadas, ...vinculadas);
+    if (isCaixaOnly(req.user)) { where.push("(a.entidade <> 'caixa' OR a.usuario_id = ?)", "a.entidade <> 'cofre'"); params.push(req.user!.id); }
   }
   res.json((db.prepare(`SELECT a.id, a.criado_em, a.usuario_id, u.nome usuario_nome, a.entidade, a.entidade_id, a.acao, a.descricao, a.alteracoes FROM auditoria a JOIN usuarios u ON u.id=a.usuario_id WHERE ${where.join(' AND ')} ORDER BY a.id DESC`).all(...params) as { alteracoes: string }[]).map((linha) => ({ ...linha, alteracoes: JSON.parse(linha.alteracoes) })));
 });

@@ -19,7 +19,7 @@ const visiveis = (alteracoes: Alteracao[]) => alteracoes.length <= 2 ? alteracoe
 const textoDaAlteracao = (alteracao: Alteracao) => `${alteracao.campo}: ${alteracao.de ?? '—'} → ${alteracao.para ?? '—'}`;
 const seloDaAcao = (acao: string) => /^(Excluiu|Inativou)/.test(acao) ? 'status status-errado' : /^(Criou|Abriu|Cadastrou|Reativou)/.test(acao) ? 'status' : 'status finalizado';
 
-/** Auditoria (dono e admin, que vê só as unidades vinculadas e não vê o cofre): o que foi alterado, quando, por quem e o de/para
+/** Auditoria (dono e admin, que vê só as unidades vinculadas, inclusive no cofre): o que foi alterado, quando, por quem e o de/para
  * de cada campo, gravados pelo server (auditoria.ts). */
 export default function Auditoria({ recarga, onAbrirCaixa }: { recarga: number; onAbrirCaixa: (id: number) => void }) {
   const [registros, setRegistros] = useState<Registro[]>([]);
