@@ -10,7 +10,7 @@ import { db, recalcularDiferencas } from './db';
 import { regrasVoucherPadrao, VALIDADE_VOUCHER_DIAS } from './voucher';
 import { limites } from './limites';
 import { cargoRestringe, nomesCargos } from './cargos';
-import { fotoCaixa, fotoMaquininha, fotoMotivo, fotoMovimentacao, fotoUnidade, fotoUsuario, fotoVoucher, registrar } from './auditoria';
+import { fotoCaixa, fotoMaquininha, fotoMotivo, fotoMovimentacao, fotoTipoCofre, fotoUnidade, fotoUsuario, fotoVoucher, registrar } from './auditoria';
 import { aguardarReplicacao } from './replicacao';
 
 const app = express();
@@ -87,15 +87,13 @@ const cedulasCofreSchema = contagensSchema.transform((itens) => itens.filter((it
   .refine((itens) => itens.length > 0, 'Informe a quantidade das cédulas e moedas.')
   .refine((itens) => new Set(itens.map((item) => item.denominacao)).size === itens.length, 'Cédula ou moeda repetida.')
   .refine((itens) => somaCedulas(itens) <= limites.valor, `Valor acima do limite de ${brl(limites.valor)}.`);
-// sinal de cada tipo lançado à mão; ajuste e outros vão para os dois lados, conforme o sentido informado
-const sinalCofre = { deposito_banco: -1, pagamento_fornecedor: -1, retirada_dono: -1, aporte: 1, ajuste: 0, outros: 0 } as const;
-const movimentacaoCofreSchema = z.object({ unidade_id: z.number({ error: 'Informe a unidade.' }).int().positive('Informe a unidade.'), tipo: z.enum(Object.keys(sinalCofre) as [keyof typeof sinalCofre], 'Tipo de movimentação inválido.'), sentido: z.enum(['entrada', 'saida'], 'Informe se o dinheiro entra ou sai.').optional(), cedulas: cedulasCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema })
-  .refine((mov) => sinalCofre[mov.tipo] !== 0 || mov.sentido, 'Informe se o dinheiro entra ou sai.')
-  .refine((mov) => sinalCofre[mov.tipo] !== 0 || mov.observacao, 'Informe a observação.');
+// o tipo vem da lista tipos_movimentacao_cofre: o sentido dele dá o sinal, e o tipo "ambos" pede o sentido a quem lança
+const movimentacaoCofreSchema = z.object({ unidade_id: z.number({ error: 'Informe a unidade.' }).int().positive('Informe a unidade.'), tipo_id: z.number({ error: 'Escolha o tipo da movimentação.' }).int().positive('Escolha o tipo da movimentação.'), sentido: z.enum(['entrada', 'saida'], 'Informe se o dinheiro entra ou sai.').optional(), cedulas: cedulasCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema });
+const tipoCofreSchema = z.object({ nome: texto('Informe o nome do tipo.', 'O nome do tipo', limites.nomeTipoCofre), sentido: z.enum(['entrada', 'saida', 'ambos'], 'Informe se o dinheiro entra, sai ou os dois.'), exige_observacao: z.boolean({ error: 'Informe se a observação é obrigatória.' }) });
 const transferenciaCofreSchema = z.object({ origem: z.number({ error: 'Informe a unidade de origem.' }).int().positive('Informe a unidade de origem.'), destino: z.number({ error: 'Informe a unidade de destino.' }).int().positive('Informe a unidade de destino.'), cedulas: cedulasCofreSchema, data: diaAteHoje, observacao: observacaoCofreSchema })
   .refine((transferencia) => transferencia.origem !== transferencia.destino, 'A origem e o destino precisam ser unidades diferentes.');
-const tiposCofre = ['envio_caixa', 'retirada_troco', 'transferencia', ...Object.keys(sinalCofre)] as const;
-const extratoCofreSchema = z.object({ de: dia.optional(), ate: dia.optional(), unidades: unidadesFiltroSchema, tipo: z.enum(tiposCofre, 'Tipo de movimentação inválido.').optional(), excluidas: z.enum(['1']).optional() });
+// no extrato, o filtro é por um tipo da lista (tipo_id) ou pelos que não são dela
+const extratoCofreSchema = z.object({ de: dia.optional(), ate: dia.optional(), unidades: unidadesFiltroSchema, tipo: z.enum(['envio_caixa', 'retirada_troco', 'transferencia'], 'Tipo de movimentação inválido.').optional(), tipo_id: z.string().regex(/^[1-9]\d*$/, 'Tipo de movimentação inválido.').transform(Number).optional(), excluidas: z.enum(['1']).optional() });
 const relatorioSchema = z.object({ de: dia, ate: dia, unidades: unidadesFiltroSchema }).refine((filtro) => filtro.de <= filtro.ate, 'A data inicial é depois da final.');
 // o dono acessa todas as unidades; funcionários e admins só as vinculadas a eles
 const unidadesVinculadas = (userId: number) => (db.prepare('SELECT unidade_id FROM usuario_unidades WHERE usuario_id=?').all(userId) as { unidade_id: number }[]).map((row) => row.unidade_id);
@@ -304,32 +302,39 @@ app.get('/api/cofre', auth, gereCofre, (req: RequestWithUser, res) => {
   res.json(saldos.map((saldo) => ({ ...saldo, cedulas: daUnidade(doTotal, saldo.unidade_id), cedulas_gaveta: daUnidade(daGaveta, saldo.unidade_id) })));
 });
 app.get('/api/cofre/movimentacoes', auth, gereCofre, (req: RequestWithUser, res) => {
-  const { de, ate, unidades, tipo, excluidas } = extratoCofreSchema.parse(req.query);
+  const { de, ate, unidades, tipo, tipo_id, excluidas } = extratoCofreSchema.parse(req.query);
   const where: string[] = []; const params: unknown[] = [];
   if (de) { where.push('e.data >= ?'); params.push(de); }
   if (ate) { where.push('e.data <= ?'); params.push(ate); }
   if (unidades.length) { where.push(`e.unidade_id IN (${unidades.map(() => '?').join(',')})`); params.push(...unidades); }
   if (tipo) { where.push('e.tipo = ?'); params.push(tipo); }
+  if (tipo_id) { where.push('e.tipo_id = ?'); params.push(tipo_id); }
   if (req.user!.tipo !== 'dono') { const vinculadas = unidadesVinculadas(req.user!.id); where.push(`e.unidade_id IN (${vinculadas.map(() => '?').join(',') || 'NULL'})`); params.push(...vinculadas); }
   const filtro = where.length ? ` AND ${where.join(' AND ')}` : '';
-  const movimentacoes = db.prepare(`SELECT e.*, u.nome unidade_nome, usr.nome usuario_nome, exc.nome excluido_por_nome, f.turno,
+  const movimentacoes = db.prepare(`SELECT e.*, t.nome tipo_nome, u.nome unidade_nome, usr.nome usuario_nome, exc.nome excluido_por_nome, f.turno,
       (SELECT u2.nome FROM cofre_movimentacoes m2 JOIN unidades u2 ON u2.id=m2.unidade_id WHERE m2.transferencia_id=e.transferencia_id AND m2.id<>e.movimentacao_id) contraparte_nome
-    FROM cofre_extrato e JOIN unidades u ON u.id=e.unidade_id JOIN usuarios usr ON usr.id=e.usuario_id LEFT JOIN usuarios exc ON exc.id=e.excluido_por LEFT JOIN fechamentos f ON f.id=e.fechamento_id
+    FROM cofre_extrato e LEFT JOIN tipos_movimentacao_cofre t ON t.id=e.tipo_id JOIN unidades u ON u.id=e.unidade_id JOIN usuarios usr ON usr.id=e.usuario_id LEFT JOIN usuarios exc ON exc.id=e.excluido_por LEFT JOIN fechamentos f ON f.id=e.fechamento_id
     WHERE ${excluidas ? '1=1' : 'e.ativo=1'}${filtro} ORDER BY e.data DESC, e.criado_em DESC, e.chave DESC`).all(...params) as { chave: string }[];
   // cédulas de cada linha, sem sinal (o sentido é o do valor); lançamentos anteriores às cédulas e caixas sem contagem vêm sem
   const cedulas = new Map<string, { denominacao: number; quantidade: number }[]>();
   for (const { chave, ...cedula } of db.prepare(`SELECT e.chave, e.denominacao, ABS(e.quantidade) quantidade FROM cofre_extrato_cedulas e WHERE ${excluidas ? '1=1' : 'e.ativo=1'}${filtro} ORDER BY e.denominacao DESC`).all(...params) as { chave: string; denominacao: number; quantidade: number }[]) cedulas.set(chave, [...(cedulas.get(chave) ?? []), cedula]);
-  const totais = db.prepare(`SELECT e.tipo, ROUND(SUM(CASE WHEN e.valor > 0 THEN e.valor ELSE 0 END), 2) entradas, ROUND(SUM(CASE WHEN e.valor < 0 THEN -e.valor ELSE 0 END), 2) saidas
-    FROM cofre_extrato e WHERE e.ativo=1${filtro} GROUP BY e.tipo`).all(...params);
+  // os totais seguem a ordem do extrato: caixas, transferências e os tipos da lista pelo nome
+  const totais = db.prepare(`SELECT e.tipo, e.tipo_id, t.nome tipo_nome, ROUND(SUM(CASE WHEN e.valor > 0 THEN e.valor ELSE 0 END), 2) entradas, ROUND(SUM(CASE WHEN e.valor < 0 THEN -e.valor ELSE 0 END), 2) saidas
+    FROM cofre_extrato e LEFT JOIN tipos_movimentacao_cofre t ON t.id=e.tipo_id WHERE e.ativo=1${filtro} GROUP BY e.tipo, e.tipo_id
+    ORDER BY CASE e.tipo WHEN 'envio_caixa' THEN 0 WHEN 'retirada_troco' THEN 1 WHEN 'transferencia' THEN 2 ELSE 3 END, t.nome`).all(...params);
   res.json({ movimentacoes: movimentacoes.map((mov) => ({ ...mov, cedulas: cedulas.get(mov.chave) ?? [] })), totais });
 });
 app.post('/api/cofre/movimentacoes', auth, gereCofre, (req: RequestWithUser, res) => {
-  const { unidade_id, tipo, sentido, cedulas, data, observacao } = movimentacaoCofreSchema.parse(req.body);
+  const { unidade_id, tipo_id, sentido, cedulas, data, observacao } = movimentacaoCofreSchema.parse(req.body);
   if (!unidadeAtiva(unidade_id)) return res.status(400).json({ erro: 'Unidade não encontrada.' });
   if (!acessaUnidade(req.user!, unidade_id)) return res.status(403).json(semAcessoUnidade);
-  const sinal = sinalCofre[tipo] || (sentido === 'entrada' ? 1 : -1);
+  const tipo = db.prepare('SELECT sentido, exige_observacao FROM tipos_movimentacao_cofre WHERE id=? AND ativo=1').get(tipo_id) as { sentido: 'entrada' | 'saida' | 'ambos'; exige_observacao: number } | undefined;
+  if (!tipo) return res.status(400).json({ erro: 'Tipo de movimentação não encontrado ou desativado.' });
+  if (tipo.sentido === 'ambos' && !sentido) return res.status(400).json({ erro: 'Informe se o dinheiro entra ou sai.' });
+  if (tipo.exige_observacao && !observacao) return res.status(400).json({ erro: 'Informe a observação.' });
+  const sinal = (tipo.sentido === 'ambos' ? sentido : tipo.sentido) === 'entrada' ? 1 : -1;
   const id = db.transaction(() => {
-    const novoId = Number(db.prepare('INSERT INTO cofre_movimentacoes (unidade_id,tipo,valor,data,observacao,usuario_id) VALUES (?,?,?,?,?,?)').run(unidade_id, tipo, sinal * somaCedulas(cedulas), data, observacao, req.user!.id).lastInsertRowid);
+    const novoId = Number(db.prepare("INSERT INTO cofre_movimentacoes (unidade_id,tipo,tipo_id,valor,data,observacao,usuario_id) VALUES (?,'lancamento',?,?,?,?,?)").run(unidade_id, tipo_id, sinal * somaCedulas(cedulas), data, observacao, req.user!.id).lastInsertRowid);
     salvarCedulasCofre(novoId, cedulas);
     return novoId;
   })();
@@ -366,6 +371,35 @@ app.delete('/api/cofre/movimentacoes/:id', auth, gereCofre, (req: RequestWithUse
   registrar(req.user!.id, 'cofre', alvo, 'Excluiu', antes, fotoMovimentacao(alvo));
   res.json({ mensagem: 'Movimentação excluída.' });
 });
+// tipos de movimentação do cofre: uma lista para a rede, gerida por quem gere o cofre. Desativar tira o tipo da Nova movimentação, e os
+// lançamentos que já o usaram continuam com ele (o extrato lê o nome por JOIN, então renomear corrige também os antigos)
+const selectTipoCofre = 'SELECT id, nome, sentido, exige_observacao, ativo FROM tipos_movimentacao_cofre';
+const tipoCofreNaoEncontrado = { erro: 'Tipo de movimentação não encontrado.' };
+// nome único sem diferenciar maiúsculas, inclusive nas letras acentuadas, como o da unidade; o inativo pede a reativação
+const conflitoDeNomeTipoCofre = (nome: string, ignorarId?: number) => { const chave = nome.toLocaleLowerCase('pt-BR'); const igual = (db.prepare('SELECT id, nome, ativo FROM tipos_movimentacao_cofre').all() as { id: number; nome: string; ativo: number }[]).find((tipo) => tipo.id !== ignorarId && tipo.nome.toLocaleLowerCase('pt-BR') === chave); return !igual ? null : igual.ativo ? `Já existe o tipo ${igual.nome}.` : `Já existe o tipo inativo ${igual.nome}. Reative-o na lista.`; };
+app.get('/api/cofre/tipos', auth, gereCofre, (_, res) => res.json(db.prepare(`${selectTipoCofre} ORDER BY nome`).all()));
+app.post('/api/cofre/tipos', auth, gereCofre, (req: RequestWithUser, res) => {
+  const { nome, sentido, exige_observacao } = tipoCofreSchema.parse(req.body ?? {});
+  const conflito = conflitoDeNomeTipoCofre(nome); if (conflito) return res.status(409).json({ erro: conflito });
+  const id = Number(db.prepare('INSERT INTO tipos_movimentacao_cofre (nome, sentido, exige_observacao) VALUES (?,?,?)').run(nome, sentido, Number(exige_observacao)).lastInsertRowid);
+  registrar(req.user!.id, 'tipo_cofre', id, 'Criou', null, fotoTipoCofre(id));
+  res.status(201).json(db.prepare(`${selectTipoCofre} WHERE id=?`).get(id));
+});
+// muda nome, sentido e observação obrigatória; o sentido novo vale só para os lançamentos seguintes, porque cada um guarda o valor com sinal
+app.patch('/api/cofre/tipos/:id', auth, gereCofre, (req: RequestWithUser, res) => {
+  const id = Number(req.params.id);
+  const campos = Object.entries(tipoCofreSchema.partial().parse(req.body ?? {})).filter(([, valor]) => valor !== undefined);
+  if (!db.prepare('SELECT id FROM tipos_movimentacao_cofre WHERE id=?').get(id)) return res.status(404).json(tipoCofreNaoEncontrado);
+  if (!campos.length) return res.status(400).json({ erro: 'Nenhuma alteração informada.' });
+  const nome = campos.find(([campo]) => campo === 'nome')?.[1] as string | undefined;
+  const conflito = nome === undefined ? null : conflitoDeNomeTipoCofre(nome, id); if (conflito) return res.status(409).json({ erro: conflito });
+  const antes = fotoTipoCofre(id);
+  db.prepare(`UPDATE tipos_movimentacao_cofre SET ${campos.map(([campo]) => `${campo}=?`).join(', ')} WHERE id=?`).run(...campos.map(([, valor]) => typeof valor === 'boolean' ? Number(valor) : valor), id);
+  registrar(req.user!.id, 'tipo_cofre', id, 'Alterou', antes, fotoTipoCofre(id));
+  res.json(db.prepare(`${selectTipoCofre} WHERE id=?`).get(id));
+});
+app.delete('/api/cofre/tipos/:id', auth, gereCofre, (req: RequestWithUser, res) => { const id = Number(req.params.id); const antes = fotoTipoCofre(id); if (!db.prepare('UPDATE tipos_movimentacao_cofre SET ativo=0 WHERE id=? AND ativo=1').run(id).changes) return res.status(404).json(tipoCofreNaoEncontrado); registrar(req.user!.id, 'tipo_cofre', id, 'Desativou', antes, fotoTipoCofre(id)); res.status(204).end(); });
+app.post('/api/cofre/tipos/:id/reativar', auth, gereCofre, (req: RequestWithUser, res) => { const id = Number(req.params.id); const antes = fotoTipoCofre(id); if (!db.prepare('UPDATE tipos_movimentacao_cofre SET ativo=1 WHERE id=? AND ativo=0').run(id).changes) return res.status(404).json(tipoCofreNaoEncontrado); registrar(req.user!.id, 'tipo_cofre', id, 'Reativou', antes, fotoTipoCofre(id)); res.json(db.prepare(`${selectTipoCofre} WHERE id=?`).get(id)); });
 // motivos de saída: qualquer usuário lista e cadastra (na etapa Saídas); só admin e dono renomeiam e excluem
 const nomeMotivoSchema = texto('Informe o nome do motivo.', 'O nome do motivo', limites.nomeMotivo);
 app.get('/api/motivos-saida', auth, (_, res) => res.json(db.prepare('SELECT id, nome FROM motivos_saida WHERE ativo=1 ORDER BY nome').all()));
@@ -509,15 +543,15 @@ app.patch('/api/usuarios/:id', auth, allow('dono'), async (req: RequestWithUser,
 if (cargo !== undefined) { const novoCargo = String(cargo || '').trim() || null; if (novoCargo && !nomesCargos.includes(novoCargo) && novoCargo !== target.cargo) return res.status(400).json({ erro: 'Cargo inválido.' }); updates.push('cargo=?'); params.push(novoCargo); } if (tipo !== undefined && !isOwnerAccount) { if (!['funcionario', 'admin'].includes(tipo)) return res.status(400).json({ erro: 'Perfil inválido.' }); updates.push('tipo=?'); params.push(tipo); } const novasUnidades = unidades === undefined ? undefined : unidadesUsuarioSchema.parse(unidades); if (!updates.length && novasUnidades === undefined) return res.status(400).json({ erro: 'Nenhuma alteração informada.' }); if (updates.length) { try { db.prepare(`UPDATE usuarios SET ${updates.join(',')} WHERE id=?`).run(...params, id); } catch { return res.status(409).json({ erro: 'Este e-mail já está em uso por outro usuário.' }); } } if (novasUnidades) db.transaction(() => salvarVinculos(id, novasUnidades))(); registrar(req.user!.id, 'usuario', id, 'Alterou', antes, fotoUsuario(id), senha ? [{ campo: 'Senha', de: null, para: 'redefinida pelo dono' }] : []); res.json({ usuario: lerUsuario(id) }); });
 // auditoria: as alterações do período pelo dia de Brasília, mais recentes primeiro; o de/para vem pronto de auditoria.ts.
 // O dono vê tudo; o admin, o que já enxerga no sistema: caixas, maquininhas, unidades, vouchers e cofre só das unidades vinculadas
-// (a transferência do cofre, gravada na origem, também pelo destino), usuários e motivos todos; com cargo Caixa, só os caixas que ele mesmo alterou e nada do cofre
+// (a transferência do cofre, gravada na origem, também pelo destino), usuários, motivos e tipos do cofre todos; com cargo Caixa, só os caixas que ele mesmo alterou e nada do cofre
 const auditoriaSchema = z.object({ de: dia, ate: dia }).refine((filtro) => filtro.de <= filtro.ate, 'A data inicial é depois da final.');
 app.get('/api/auditoria', auth, allow('admin', 'dono'), (req: RequestWithUser, res) => {
   const { de, ate } = auditoriaSchema.parse(req.query);
   const where = ["date(a.criado_em, '-3 hours') BETWEEN ? AND ?"]; const params: unknown[] = [de, ate];
   if (req.user!.tipo !== 'dono') {
     const vinculadas = unidadesVinculadas(req.user!.id); const nasVinculadas = `IN (${vinculadas.map(() => '?').join(',') || 'NULL'})`;
-    where.push(`(a.entidade IN ('usuario', 'motivo') OR (a.entidade IN ('caixa', 'maquininha', 'unidade', 'voucher', 'cofre') AND a.unidade_id ${nasVinculadas}) OR (a.entidade = 'cofre' AND EXISTS (SELECT 1 FROM cofre_movimentacoes m WHERE m.transferencia_id = a.entidade_id AND m.unidade_id ${nasVinculadas})))`); params.push(...vinculadas, ...vinculadas);
-    if (isCaixaOnly(req.user)) { where.push("(a.entidade <> 'caixa' OR a.usuario_id = ?)", "a.entidade <> 'cofre'"); params.push(req.user!.id); }
+    where.push(`(a.entidade IN ('usuario', 'motivo', 'tipo_cofre') OR (a.entidade IN ('caixa', 'maquininha', 'unidade', 'voucher', 'cofre') AND a.unidade_id ${nasVinculadas}) OR (a.entidade = 'cofre' AND EXISTS (SELECT 1 FROM cofre_movimentacoes m WHERE m.transferencia_id = a.entidade_id AND m.unidade_id ${nasVinculadas})))`); params.push(...vinculadas, ...vinculadas);
+    if (isCaixaOnly(req.user)) { where.push("(a.entidade <> 'caixa' OR a.usuario_id = ?)", "a.entidade NOT IN ('cofre', 'tipo_cofre')"); params.push(req.user!.id); }
   }
   res.json((db.prepare(`SELECT a.id, a.criado_em, a.usuario_id, u.nome usuario_nome, a.entidade, a.entidade_id, a.acao, a.descricao, a.alteracoes FROM auditoria a JOIN usuarios u ON u.id=a.usuario_id WHERE ${where.join(' AND ')} ORDER BY a.id DESC`).all(...params) as { alteracoes: string }[]).map((linha) => ({ ...linha, alteracoes: JSON.parse(linha.alteracoes) })));
 });

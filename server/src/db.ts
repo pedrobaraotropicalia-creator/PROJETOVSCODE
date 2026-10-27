@@ -34,20 +34,48 @@ try { db.exec('ALTER TABLE fechamentos ADD COLUMN troco_continua INTEGER'); } ca
 try { db.exec('ALTER TABLE fechamentos ADD COLUMN data_caixa TEXT'); } catch { /* coluna já existe */ }
 db.exec("UPDATE fechamentos SET data_caixa=date(criado_em, '-3 hours') WHERE data_caixa IS NULL");
 
-// Cofre: um por unidade, saldo em R$ do dinheiro em espécie. Só os lançamentos do dono são gravados aqui (valor positivo entra, negativo sai);
-// a transferência grava as duas pontas com transferencia_id = id da ponta de origem
-db.exec(`CREATE TABLE IF NOT EXISTS cofre_movimentacoes (id INTEGER PRIMARY KEY AUTOINCREMENT, unidade_id INTEGER NOT NULL REFERENCES unidades(id), tipo TEXT NOT NULL CHECK(tipo IN ('transferencia','deposito_banco','pagamento_fornecedor','retirada_dono','aporte','ajuste','outros')), valor REAL NOT NULL CHECK(valor <> 0), data TEXT NOT NULL, observacao TEXT, transferencia_id INTEGER REFERENCES cofre_movimentacoes(id), usuario_id INTEGER NOT NULL REFERENCES usuarios(id), criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, ativo INTEGER NOT NULL DEFAULT 1, excluido_por INTEGER REFERENCES usuarios(id), excluido_em TEXT)`);
+// tipos dos lançamentos do cofre (tela Tipos de movimentação), uma lista para a rede: o sentido (entrada, saida ou ambos, em que quem lança
+// escolhe) e se pede observação. O lançamento guarda o tipo_id e o valor com sinal, então renomear corrige o extrato antigo e mudar o sentido
+// vale só para os lançamentos seguintes. Transferência, envio do caixa e retirada para troco não são da lista: cada um tem regra própria
+const tiposCofreNovos = !db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tipos_movimentacao_cofre'").get();
+// os tipos fixos de antes da lista, que ela recebe ao ser criada; a chave é o tipo que os lançamentos antigos gravavam
+const tiposCofreIniciais = { deposito_banco: ['Depósito no banco', 'saida', 0], pagamento_fornecedor: ['Pagamento a fornecedor', 'saida', 0], retirada_dono: ['Retirada do dono', 'saida', 0], aporte: ['Aporte', 'entrada', 0], ajuste: ['Ajuste de conferência', 'ambos', 1], outros: ['Outros', 'ambos', 1] } as const;
+db.transaction(() => {
+  db.exec("CREATE TABLE IF NOT EXISTS tipos_movimentacao_cofre (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL UNIQUE COLLATE NOCASE, sentido TEXT NOT NULL CHECK(sentido IN ('entrada','saida','ambos')), exige_observacao INTEGER NOT NULL DEFAULT 0, ativo INTEGER NOT NULL DEFAULT 1, criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  if (tiposCofreNovos) Object.values(tiposCofreIniciais).forEach(([nome, sentido, exige]) => db.prepare('INSERT INTO tipos_movimentacao_cofre (nome, sentido, exige_observacao) VALUES (?,?,?)').run(nome, sentido, exige));
+})();
+// Cofre: um por unidade, saldo em R$ do dinheiro em espécie. Só os lançamentos manuais são gravados aqui (valor positivo entra, negativo sai):
+// tipo 'lancamento' com o tipo_id da lista, ou 'transferencia', que grava as duas pontas com transferencia_id = id da ponta de origem
+const tabelaCofre = (nome: string) => `CREATE TABLE ${nome} (id INTEGER PRIMARY KEY AUTOINCREMENT, unidade_id INTEGER NOT NULL REFERENCES unidades(id), tipo TEXT NOT NULL CHECK(tipo IN ('transferencia','lancamento')), tipo_id INTEGER REFERENCES tipos_movimentacao_cofre(id), valor REAL NOT NULL CHECK(valor <> 0), data TEXT NOT NULL, observacao TEXT, transferencia_id INTEGER REFERENCES cofre_movimentacoes(id), usuario_id INTEGER NOT NULL REFERENCES usuarios(id), criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, ativo INTEGER NOT NULL DEFAULT 1, excluido_por INTEGER REFERENCES usuarios(id), excluido_em TEXT, CHECK((tipo = 'lancamento') = (tipo_id IS NOT NULL)))`;
+const colunasCofre = (db.prepare('PRAGMA table_info(cofre_movimentacoes)').all() as { name: string }[]).map((coluna) => coluna.name);
+if (!colunasCofre.length) db.exec(tabelaCofre('cofre_movimentacoes'));
+else if (!colunasCofre.includes('tipo_id')) {
+  // a tabela de antes da lista só aceitava os tipos fixos (CHECK), que o SQLite não deixa alterar: é recriada com os mesmos ids,
+  // e cada lançamento recebe o tipo_id do seu tipo. As views que leem a tabela são recriadas logo abaixo
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec('DROP VIEW IF EXISTS cofre_extrato; DROP VIEW IF EXISTS cofre_extrato_cedulas');
+      db.exec(tabelaCofre('cofre_movimentacoes_nova'));
+      const tipoId = `(SELECT t.id FROM tipos_movimentacao_cofre t WHERE t.nome = CASE m.tipo ${Object.entries(tiposCofreIniciais).map(([chave, [nome]]) => `WHEN '${chave}' THEN '${nome}'`).join(' ')} END)`;
+      db.exec(`INSERT INTO cofre_movimentacoes_nova (id, unidade_id, tipo, tipo_id, valor, data, observacao, transferencia_id, usuario_id, criado_em, ativo, excluido_por, excluido_em)
+        SELECT m.id, m.unidade_id, CASE m.tipo WHEN 'transferencia' THEN 'transferencia' ELSE 'lancamento' END, CASE m.tipo WHEN 'transferencia' THEN NULL ELSE ${tipoId} END, m.valor, m.data, m.observacao, m.transferencia_id, m.usuario_id, m.criado_em, m.ativo, m.excluido_por, m.excluido_em FROM cofre_movimentacoes m`);
+      db.exec('DROP TABLE cofre_movimentacoes; ALTER TABLE cofre_movimentacoes_nova RENAME TO cofre_movimentacoes');
+      if ((db.pragma('foreign_key_check') as unknown[]).length) throw new Error('Migração do cofre: referência inválida.');
+    })();
+  } finally { db.pragma('foreign_keys = ON'); }
+}
 // 1 quando o caixa movimenta o cofre: gravado na primeira finalização, então os caixas finalizados antes do cofre existir ficam null para sempre
 try { db.exec('ALTER TABLE fechamentos ADD COLUMN movimenta_cofre INTEGER'); } catch { /* coluna já existe */ }
 // os caixas não gravam movimentação: o extrato as deriva dos fechamentos (o caixa finalizado manda ao cofre o dinheiro contado e tira dele o saldo inicial),
 // então reabrir, editar ou excluir o caixa já reflete no cofre
 db.exec(`DROP VIEW IF EXISTS cofre_extrato;
 CREATE VIEW cofre_extrato AS
-  SELECT 'm' || id chave, id movimentacao_id, NULL fechamento_id, unidade_id, tipo, valor, data, observacao, transferencia_id, usuario_id, criado_em, ativo, excluido_por, excluido_em FROM cofre_movimentacoes
+  SELECT 'm' || id chave, id movimentacao_id, NULL fechamento_id, unidade_id, tipo, tipo_id, valor, data, observacao, transferencia_id, usuario_id, criado_em, ativo, excluido_por, excluido_em FROM cofre_movimentacoes
   UNION ALL
-  SELECT 'e' || id, NULL, id, unidade_id, 'envio_caixa', dinheiro_fisico, data_caixa, NULL, NULL, usuario_id, finalizado_em, 1, NULL, NULL FROM fechamentos WHERE movimenta_cofre=1 AND status<>'aberto' AND dinheiro_fisico<>0
+  SELECT 'e' || id, NULL, id, unidade_id, 'envio_caixa', NULL, dinheiro_fisico, data_caixa, NULL, NULL, usuario_id, finalizado_em, 1, NULL, NULL FROM fechamentos WHERE movimenta_cofre=1 AND status<>'aberto' AND dinheiro_fisico<>0
   UNION ALL
-  SELECT 'r' || id, NULL, id, unidade_id, 'retirada_troco', -saldo_inicial, data_caixa, NULL, NULL, usuario_id, finalizado_em, 1, NULL, NULL FROM fechamentos WHERE movimenta_cofre=1 AND status<>'aberto' AND saldo_inicial<>0`);
+  SELECT 'r' || id, NULL, id, unidade_id, 'retirada_troco', NULL, -saldo_inicial, data_caixa, NULL, NULL, usuario_id, finalizado_em, 1, NULL, NULL FROM fechamentos WHERE movimenta_cofre=1 AND status<>'aberto' AND saldo_inicial<>0`);
 // cédulas e moedas de cada lançamento do dono (quantidade sem sinal: o sentido é o do valor, que é a soma delas); a transferência grava as mesmas
 // nas duas pontas. Os lançamentos anteriores a esta tabela ficam sem cédulas
 db.exec('CREATE TABLE IF NOT EXISTS cofre_cedulas (movimentacao_id INTEGER NOT NULL REFERENCES cofre_movimentacoes(id), denominacao REAL NOT NULL, quantidade INTEGER NOT NULL CHECK(quantidade > 0), PRIMARY KEY (movimentacao_id, denominacao))');
@@ -55,9 +83,9 @@ db.exec('CREATE TABLE IF NOT EXISTS cofre_cedulas (movimentacao_id INTEGER NOT N
 // (a do fechamento entra com o envio, a da abertura sai com a retirada para troco)
 db.exec(`DROP VIEW IF EXISTS cofre_extrato_cedulas;
 CREATE VIEW cofre_extrato_cedulas AS
-  SELECT 'm' || m.id chave, m.unidade_id, m.tipo, m.data, m.ativo, c.denominacao, CASE WHEN m.valor < 0 THEN -c.quantidade ELSE c.quantidade END quantidade FROM cofre_cedulas c JOIN cofre_movimentacoes m ON m.id=c.movimentacao_id
+  SELECT 'm' || m.id chave, m.unidade_id, m.tipo, m.tipo_id, m.data, m.ativo, c.denominacao, CASE WHEN m.valor < 0 THEN -c.quantidade ELSE c.quantidade END quantidade FROM cofre_cedulas c JOIN cofre_movimentacoes m ON m.id=c.movimentacao_id
   UNION ALL
-  SELECT CASE c.etapa WHEN 'fechamento' THEN 'e' ELSE 'r' END || f.id, f.unidade_id, CASE c.etapa WHEN 'fechamento' THEN 'envio_caixa' ELSE 'retirada_troco' END, f.data_caixa, 1, c.denominacao, CASE c.etapa WHEN 'fechamento' THEN c.quantidade ELSE -c.quantidade END
+  SELECT CASE c.etapa WHEN 'fechamento' THEN 'e' ELSE 'r' END || f.id, f.unidade_id, CASE c.etapa WHEN 'fechamento' THEN 'envio_caixa' ELSE 'retirada_troco' END, NULL, f.data_caixa, 1, c.denominacao, CASE c.etapa WHEN 'fechamento' THEN c.quantidade ELSE -c.quantidade END
   FROM contagens_dinheiro c JOIN fechamentos f ON f.id=c.fechamento_id WHERE f.movimenta_cofre=1 AND f.status<>'aberto' AND c.quantidade<>0`);
 // na criação da tabela, cada usuário é vinculado às unidades onde já registrou caixa; depois disso só o dono altera os vínculos
 const vinculosNovos = !db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usuario_unidades'").get();

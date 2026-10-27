@@ -11,6 +11,7 @@ export const limites = {
   serieMaquininha: 40,
   motivoSaida: 200,
   nomeMotivo: 60,
+  nomeTipoCofre: 60,
   observacaoCofre: 200,
   enderecoUnidade: 120,
   telefoneUnidade: 20,

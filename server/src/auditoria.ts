@@ -3,7 +3,7 @@
 // nunca entram (a rota avisa que mudaram por `extras`, sem o valor).
 import { db } from './db';
 
-export type Entidade = 'caixa' | 'unidade' | 'usuario' | 'maquininha' | 'motivo' | 'cofre' | 'voucher';
+export type Entidade = 'caixa' | 'unidade' | 'usuario' | 'maquininha' | 'motivo' | 'cofre' | 'tipo_cofre' | 'voucher';
 // unidadeId: a unidade do registro (caixa, maquininha, a própria unidade, lançamento do cofre), para o admin ver só as vinculadas a ele
 export type Foto = { descricao: string; campos: Record<string, string>; unidadeId?: number };
 export type Alteracao = { campo: string; de: string | null; para: string | null };
@@ -13,7 +13,7 @@ const diaBr = (dia: string) => dia.split('-').reverse().join('/');
 const turnoBr = (turno: string) => turno === 'JANTAR' ? 'Jantar' : 'Almoço';
 const formas: Record<string, string> = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', refeicao: 'Refeição', alimentacao: 'Alimentação', dinheiro: 'Dinheiro' };
 const perfis: Record<string, string> = { funcionario: 'Colaborador', admin: 'Admin', dono: 'Dono' };
-const tiposCofre: Record<string, string> = { transferencia: 'Transferência entre unidades', deposito_banco: 'Depósito no banco', pagamento_fornecedor: 'Pagamento a fornecedor', retirada_dono: 'Retirada do dono', aporte: 'Aporte', ajuste: 'Ajuste de conferência', outros: 'Outros' };
+const sentidos: Record<string, string> = { entrada: 'Entrada', saida: 'Saída', ambos: 'Entrada e saída' };
 
 export function fotoUnidade(id: number): Foto | null {
   const u = db.prepare('SELECT * FROM unidades WHERE id=?').get(id) as { nome: string; troco_continua: number; tolerancia_dinheiro: number; fechamento_cego: number; endereco: string | null; telefone: string | null; regras_voucher: string; ativo: number } | undefined;
@@ -40,6 +40,13 @@ export function fotoMotivo(id: number): Foto | null {
   return { descricao: `Motivo de saída ${m.nome}`, campos: { Nome: m.nome, Situação: m.ativo ? 'Ativo' : 'Excluído' } };
 }
 
+// tipo de movimentação do cofre (uma lista para a rede, sem unidade)
+export function fotoTipoCofre(id: number): Foto | null {
+  const t = db.prepare('SELECT nome, sentido, exige_observacao, ativo FROM tipos_movimentacao_cofre WHERE id=?').get(id) as { nome: string; sentido: string; exige_observacao: number; ativo: number } | undefined;
+  if (!t) return null;
+  return { descricao: `Tipo de movimentação ${t.nome}`, campos: { Nome: t.nome, Sentido: sentidos[t.sentido] ?? t.sentido, Observação: t.exige_observacao ? 'Obrigatória' : 'Opcional', Situação: t.ativo ? 'Ativo' : 'Inativo' } };
+}
+
 // o caixa com os totais de cada etapa e o detalhe que muda nelas (entradas por forma, valor de cada maquininha, a lista de saídas);
 // as contagens de cédulas entram só pelos totais (saldo inicial e dinheiro contado)
 export function fotoCaixa(id: number): Foto | null {
@@ -61,15 +68,15 @@ export function fotoCaixa(id: number): Foto | null {
 
 // lançamento manual do cofre, com as cédulas; a transferência é uma alteração só (id da ponta de origem), com origem e destino
 export function fotoMovimentacao(id: number): Foto | null {
-  const m = db.prepare('SELECT m.*, u.nome unidade FROM cofre_movimentacoes m JOIN unidades u ON u.id=m.unidade_id WHERE m.id=?').get(id) as { tipo: string; valor: number; data: string; observacao: string | null; ativo: number; transferencia_id: number | null; unidade_id: number; unidade: string } | undefined;
+  const m = db.prepare('SELECT m.*, u.nome unidade, t.nome tipo_nome FROM cofre_movimentacoes m JOIN unidades u ON u.id=m.unidade_id LEFT JOIN tipos_movimentacao_cofre t ON t.id=m.tipo_id WHERE m.id=?').get(id) as { tipo_nome: string | null; valor: number; data: string; observacao: string | null; ativo: number; transferencia_id: number | null; unidade_id: number; unidade: string } | undefined;
   if (!m) return null;
   const cedulas = (db.prepare('SELECT denominacao, quantidade FROM cofre_cedulas WHERE movimentacao_id=? ORDER BY denominacao DESC').all(id) as { denominacao: number; quantidade: number }[]).map((c) => `${c.quantidade.toLocaleString('pt-BR')} × ${brl(c.denominacao)}`);
   const comum = { Cédulas: cedulas.join('; ') || '—', Data: diaBr(m.data), Observação: m.observacao || '—', Situação: m.ativo ? 'Ativa' : 'Excluída' };
   if (m.transferencia_id) {
     const destino = db.prepare('SELECT u.nome FROM cofre_movimentacoes m JOIN unidades u ON u.id=m.unidade_id WHERE m.transferencia_id=? AND m.id<>?').get(m.transferencia_id, m.transferencia_id) as { nome: string } | undefined;
-    return { descricao: `Transferência de ${m.unidade} para ${destino?.nome ?? '—'}`, unidadeId: m.unidade_id, campos: { Tipo: tiposCofre.transferencia, Origem: m.unidade, Destino: destino?.nome ?? '—', Valor: brl(Math.abs(m.valor)), ...comum } };
+    return { descricao: `Transferência de ${m.unidade} para ${destino?.nome ?? '—'}`, unidadeId: m.unidade_id, campos: { Tipo: 'Transferência entre unidades', Origem: m.unidade, Destino: destino?.nome ?? '—', Valor: brl(Math.abs(m.valor)), ...comum } };
   }
-  const tipo = tiposCofre[m.tipo] ?? m.tipo;
+  const tipo = m.tipo_nome ?? '—';
   return { descricao: `${tipo} · ${m.unidade} · ${diaBr(m.data)}`, unidadeId: m.unidade_id, campos: { Tipo: tipo, Unidade: m.unidade, Valor: `${m.valor >= 0 ? 'Entrada' : 'Saída'} de ${brl(Math.abs(m.valor))}`, ...comum } };
 }
 

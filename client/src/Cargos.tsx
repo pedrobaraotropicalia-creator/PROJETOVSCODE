@@ -24,6 +24,7 @@ const permissoes: { acao: string; funcionario: Permissao; admin: Permissao; dono
   { acao: 'Cadastrar maquininhas e motivos de saída', funcionario: true, admin: true, dono: true },
   { acao: 'Editar e excluir maquininhas e motivos de saída', funcionario: false, admin: true, dono: true },
   { acao: 'Cofre: saldo, extrato, lançamentos e transferências', funcionario: false, admin: 'Nas unidades vinculadas', dono: 'Em todas as unidades', comCargoCaixa: 'Exceto com cargo Caixa' },
+  { acao: 'Tipos de movimentação do cofre: cadastrar, editar, ativar e desativar', funcionario: false, admin: 'Para toda a rede', dono: true, comCargoCaixa: 'Exceto com cargo Caixa' },
   { acao: 'Vouchers: cadastrar, editar, cancelar e emitir o PDF', funcionario: false, admin: 'Nas unidades vinculadas', dono: 'Em todas as unidades' },
   { acao: 'Reativar voucher cancelado', funcionario: false, admin: false, dono: true },
   { acao: 'Ver usuários, cargos e perfis', funcionario: false, admin: 'Só consulta', dono: true },
@@ -57,7 +58,7 @@ export default function CargosEPerfis({ usuarios, onFiltrar, onClose }: { usuari
         <thead><tr><th>Ação</th>{perfis.map((perfil) => <th key={perfil.tipo}><strong>{perfil.nome}</strong><small>{perfil.resumo}</small>{verUsuarios(ativos.filter((usuario) => usuario.tipo === perfil.tipo).length, { perfil: perfil.tipo }, `perfil ${perfil.nome}`)}</th>)}</tr></thead>
         <tbody>{permissoes.map((linha) => <tr key={linha.acao}><td><strong>{linha.acao}</strong></td>{perfis.map((perfil) => <td key={perfil.tipo}>{celula(linha[perfil.tipo])}{perfil.tipo === 'admin' && linha.comCargoCaixa && <small className="permissao-cargo-caixa">{linha.comCargoCaixa}</small>}</td>)}</tr>)}</tbody>
       </table></div>
-      <div className="aviso-cargo"><Icone nome="cargos" /><p><strong>Cargo Caixa:</strong> com esse cargo, até um Admin passa a funcionar como Colaborador nos caixas. Vê e edita só os próprios caixas, não vê a diferença no fechamento cego, só abre caixa com a data de hoje e não acessa o cofre; na auditoria, vê só os caixas que ele mesmo alterou. Os outros cargos não mudam o acesso.</p></div>
+      <div className="aviso-cargo"><Icone nome="cargos" /><p><strong>Cargo Caixa:</strong> com esse cargo, até um Admin passa a funcionar como Colaborador nos caixas. Vê e edita só os próprios caixas, não vê a diferença no fechamento cego, só abre caixa com a data de hoje e não acessa o cofre nem os tipos de movimentação dele; na auditoria, vê só os caixas que ele mesmo alterou. Os outros cargos não mudam o acesso.</p></div>
     </> : <div className="table-wrap"><table className="tabela-cargos">
       <thead><tr><th>Cargo</th><th>O que representa</th><th>Ativos</th></tr></thead>
       <tbody>{linhas.map((linha) => <tr key={linha.filtro}><td><div className="usuario-nome"><strong className="texto-livre">{linha.nome}</strong>{linha.antigo && <span className="status inativo">Fora da lista</span>}{cargoRestringe(linha.filtro) && <span className="status aguardando" title="Fora o dono, só vê os próprios caixas e não acessa o cofre, mesmo com perfil Admin">Restringe o acesso</span>}</div></td><td>{linha.descricao}{cargoRestringe(linha.filtro) && <small className="permissao-cargo-caixa">{restricoesCargoCaixa}</small>}</td><td>{verUsuarios(contar(linha.filtro), { cargo: linha.filtro }, `cargo ${linha.nome}`)}</td></tr>)}</tbody>
