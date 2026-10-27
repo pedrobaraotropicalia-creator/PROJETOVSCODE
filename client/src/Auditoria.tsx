@@ -10,14 +10,14 @@ type Alteracao = { campo: string; de: string | null; para: string | null };
 type Registro = { id: number; criado_em: string; usuario_id: number; usuario_nome: string; entidade: string; entidade_id: number | null; acao: string; descricao: string; alteracoes: Alteracao[] };
 type Filtro = { de: string; ate: string; entidade: string; usuario: string };
 
-const entidades: Record<string, string> = { caixa: 'Caixas', unidade: 'Unidades', usuario: 'Usuários', maquininha: 'Maquininhas', motivo: 'Motivos de saída', cofre: 'Cofre', voucher: 'Vouchers' };
+const entidades: Record<string, string> = { caixa: 'Caixas', unidade: 'Unidades', usuario: 'Usuários', maquininha: 'Maquininhas', motivo: 'Motivos de saída', cofre: 'Cofre', tipo_cofre: 'Tipos de movimentação', voucher: 'Vouchers' };
 // abre (e volta ao limpar) no mês corrente, o mesmo padrão de Caixas fechados, Cofre e Relatórios
 const filtroPadrao = (): Filtro => { const mes = mesAtual(); return { de: formatDay(mes.de), ate: formatDay(mes.ate), entidade: '', usuario: '' }; };
 // selo pela natureza da ação: criação em verde, exclusão em vermelho, o resto (alteração, finalização, conferência...) em laranja
 // toda linha da tabela tem duas linhas de texto: até duas alterações cabem; com mais, aparece a primeira e o "+N alterações" abre o resto
 const visiveis = (alteracoes: Alteracao[]) => alteracoes.length <= 2 ? alteracoes : alteracoes.slice(0, 1);
 const textoDaAlteracao = (alteracao: Alteracao) => `${alteracao.campo}: ${alteracao.de ?? '—'} → ${alteracao.para ?? '—'}`;
-const seloDaAcao = (acao: string) => /^(Excluiu|Inativou)/.test(acao) ? 'status status-errado' : /^(Criou|Abriu|Cadastrou|Reativou)/.test(acao) ? 'status' : 'status finalizado';
+const seloDaAcao = (acao: string) => /^(Excluiu|Inativou|Desativou)/.test(acao) ? 'status status-errado' : /^(Criou|Abriu|Cadastrou|Reativou)/.test(acao) ? 'status' : 'status finalizado';
 
 /** Auditoria (dono e admin, que vê só as unidades vinculadas, inclusive no cofre): o que foi alterado, quando, por quem e o de/para
  * de cada campo, gravados pelo server (auditoria.ts). */

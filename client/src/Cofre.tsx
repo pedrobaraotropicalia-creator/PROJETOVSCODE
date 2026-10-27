@@ -9,21 +9,19 @@ import { CountGrid, countsPayload, countsTotal, denominacoes, type Counts } from
 import { useDialogos } from './dialogos';
 import { Icone } from './icones';
 import PainelLateral from './PainelLateral';
+import type { TipoCofre } from './TiposCofre';
 import { limites } from '../../server/src/limites';
 
 type Unit = { id: number; nome: string };
 type Cedula = { denominacao: number; quantidade: number };
 // cedulas: as do total, com sinal (negativa quando saiu mais do que entrou); cedulas_gaveta: as da abertura dos caixas abertos
 type Saldo = { unidade_id: number; nome: string; total: number; fundo_gaveta: number; cedulas: Cedula[]; cedulas_gaveta: Cedula[] };
-type Movimentacao = { chave: string; movimentacao_id: number | null; fechamento_id: number | null; unidade_id: number; unidade_nome: string; tipo: string; valor: number; data: string; observacao: string | null; transferencia_id: number | null; contraparte_nome: string | null; turno: string | null; usuario_nome: string; criado_em: string; ativo: number; excluido_por_nome: string | null; excluido_em: string | null; cedulas: Cedula[] };
-type Extrato = { movimentacoes: Movimentacao[]; totais: { tipo: string; entradas: number; saidas: number }[] };
+type Movimentacao = { chave: string; movimentacao_id: number | null; fechamento_id: number | null; unidade_id: number; unidade_nome: string; tipo: string; tipo_id: number | null; tipo_nome: string | null; valor: number; data: string; observacao: string | null; transferencia_id: number | null; contraparte_nome: string | null; turno: string | null; usuario_nome: string; criado_em: string; ativo: number; excluido_por_nome: string | null; excluido_em: string | null; cedulas: Cedula[] };
+type Extrato = { movimentacoes: Movimentacao[]; totais: { tipo: string; tipo_id: number | null; tipo_nome: string | null; entradas: number; saidas: number }[] };
 
-const nomesTipo: Record<string, string> = { envio_caixa: 'Envio do caixa', retirada_troco: 'Retirada para troco', transferencia: 'Transferência entre unidades', deposito_banco: 'Depósito no banco', pagamento_fornecedor: 'Pagamento a fornecedor', retirada_dono: 'Retirada do dono', aporte: 'Aporte', ajuste: 'Ajuste de conferência', outros: 'Outros' };
-const tiposManuais = ['deposito_banco', 'pagamento_fornecedor', 'retirada_dono', 'aporte', 'ajuste', 'outros'];
-// tipos que vão para os dois lados: quem lança diz o sentido e explica na observação
-const comSentido = ['ajuste', 'outros'];
-// tipos que sempre tiram dinheiro do cofre (o aporte sempre põe)
-const tiposDeSaida = ['deposito_banco', 'pagamento_fornecedor', 'retirada_dono'];
+// as linhas que não são da lista de tipos (tela Tipos de movimentação): as dos caixas e a transferência; os lançamentos trazem o tipo_nome
+const nomesTipo: Record<string, string> = { envio_caixa: 'Envio do caixa', retirada_troco: 'Retirada para troco', transferencia: 'Transferência entre unidades' };
+const nomeDoTipo = (linha: { tipo: string; tipo_nome: string | null }) => linha.tipo_nome ?? nomesTipo[linha.tipo];
 // abre (e volta ao limpar) no mês corrente; os saldos não dependem do filtro
 const filtroPadrao = () => { const mes = mesAtual(); return { de: formatDay(mes.de), ate: formatDay(mes.ate), unidades: [] as number[], tipo: '', excluidas: false }; };
 const cor = (valor: number) => valor < 0 ? 'red' : valor > 0 ? 'green' : '';
@@ -34,7 +32,7 @@ const quantidade = (valor: number) => valor.toLocaleString('pt-BR');
 const descricao = (mov: Movimentacao) => {
   if (mov.tipo === 'transferencia') return `Transferência ${mov.valor < 0 ? 'para' : 'de'} ${mov.contraparte_nome}`;
   if (mov.fechamento_id) return `${nomesTipo[mov.tipo]} (${mov.turno === 'JANTAR' ? 'jantar' : 'almoço'})`;
-  return nomesTipo[mov.tipo];
+  return nomeDoTipo(mov);
 };
 
 // o que está no cofre é o total menos o fundo na gaveta, cédula por cédula
@@ -97,10 +95,12 @@ export default function Cofre({ units, recarga, onAbrirCaixa }: { units: Unit[];
   const [abertas, setAbertas] = useState<string[]>([]);
   // unidade com as cédulas do saldo no painel lateral
   const [composicao, setComposicao] = useState<number | null>(null);
+  const [tipos, setTipos] = useState<TipoCofre[]>([]);
+  useEffect(() => { request('/cofre/tipos').then(setTipos).catch((err) => toast.error((err as Error).message)); }, [recarga]);
   const saldoAberto = saldos.find((saldo) => saldo.unidade_id === composicao);
   // datas incompletas ficam fora da consulta até virarem uma data válida
   const [de, ate] = [parseDate(filtro.de), parseDate(filtro.ate)];
-  const consulta = new URLSearchParams({ ...(de ? { de } : {}), ...(ate ? { ate } : {}), ...(filtro.unidades.length ? { unidades: filtro.unidades.join(',') } : {}), ...(filtro.tipo ? { tipo: filtro.tipo } : {}), ...(filtro.excluidas ? { excluidas: '1' } : {}) }).toString();
+  const consulta = new URLSearchParams({ ...(de ? { de } : {}), ...(ate ? { ate } : {}), ...(filtro.unidades.length ? { unidades: filtro.unidades.join(',') } : {}), ...(filtro.tipo ? /^\d+$/.test(filtro.tipo) ? { tipo_id: filtro.tipo } : { tipo: filtro.tipo } : {}), ...(filtro.excluidas ? { excluidas: '1' } : {}) }).toString();
   useEffect(() => {
     let atual = true;
     Promise.all([request('/cofre'), request(`/cofre/movimentacoes?${consulta}`)]).then(([novosSaldos, novoExtrato]) => { if (atual) { setSaldos(novosSaldos); setExtrato(novoExtrato); } }).catch((err) => toast.error((err as Error).message));
@@ -132,11 +132,11 @@ export default function Cofre({ units, recarga, onAbrirCaixa }: { units: Unit[];
         <label className="report-date">De<DataInput label="Data inicial" value={filtro.de} onChange={(valor) => setFiltro({ ...filtro, de: valor })} /></label>
         <label className="report-date">Até<DataInput label="Data final" value={filtro.ate} onChange={(valor) => setFiltro({ ...filtro, ate: valor })} /></label>
         <UnitMultiSelect units={units} value={filtro.unidades} onChange={(unidades) => setFiltro({ ...filtro, unidades })} ariaLabel="Filtrar por unidades" />
-        <select aria-label="Tipo" value={filtro.tipo} onChange={(event) => setFiltro({ ...filtro, tipo: event.target.value })}><option value="">Todos os tipos</option>{Object.entries(nomesTipo).map(([tipo, nome]) => <option key={tipo} value={tipo}>{nome}</option>)}</select>
+        <select aria-label="Tipo" value={filtro.tipo} onChange={(event) => setFiltro({ ...filtro, tipo: event.target.value })}><option value="">Todos os tipos</option>{Object.entries(nomesTipo).map(([tipo, nome]) => <option key={tipo} value={tipo}>{nome}</option>)}{tipos.map((tipo) => <option key={tipo.id} value={tipo.id}>{tipo.nome}{tipo.ativo ? '' : ' (inativo)'}</option>)}</select>
         <label className="unit-troco"><input type="checkbox" checked={filtro.excluidas} onChange={(event) => setFiltro({ ...filtro, excluidas: event.target.checked })} />Mostrar excluídas</label>
         {JSON.stringify(filtro) !== JSON.stringify(filtroPadrao()) && <button type="button" className="ghost" onClick={() => setFiltro(filtroPadrao())}>Limpar filtros</button>}
       </div>
-      {extrato.totais.length > 0 && <div className="table-wrap cofre-totais"><table><thead><tr><th>Tipo</th><th>Entradas</th><th>Saídas</th></tr></thead><tbody>{Object.keys(nomesTipo).map((tipo) => extrato.totais.find((total) => total.tipo === tipo)).filter((total) => total !== undefined).map((total) => <tr key={total.tipo}><td><strong>{nomesTipo[total.tipo]}</strong></td><td className={cor(total.entradas)}>{total.entradas ? money(total.entradas) : '—'}</td><td className={cor(-total.saidas)}>{total.saidas ? money(total.saidas) : '—'}</td></tr>)}</tbody></table></div>}
+      {extrato.totais.length > 0 && <div className="table-wrap cofre-totais"><table><thead><tr><th>Tipo</th><th>Entradas</th><th>Saídas</th></tr></thead><tbody>{extrato.totais.map((total) => <tr key={total.tipo_id ?? total.tipo}><td><strong>{nomeDoTipo(total)}</strong></td><td className={cor(total.entradas)}>{total.entradas ? money(total.entradas) : '—'}</td><td className={cor(-total.saidas)}>{total.saidas ? money(total.saidas) : '—'}</td></tr>)}</tbody></table></div>}
       <div className="table-wrap"><table className="cofre-extrato tabela-cartoes"><thead><tr><th>Data</th><th>Unidade</th><th>Movimentação</th><th>Valor</th><th>Observação</th><th>Lançado por</th><th>Ações</th></tr></thead><tbody>
         {extrato.movimentacoes.length ? paginar(extrato.movimentacoes, paginaAtual).map((mov) => <Fragment key={mov.chave}>
           <tr className={`${mov.ativo ? '' : 'cofre-excluida'} ${abertas.includes(mov.chave) ? 'cofre-com-cedulas' : ''}`}>
@@ -156,19 +156,23 @@ export default function Cofre({ units, recarga, onAbrirCaixa }: { units: Unit[];
       </tbody></table></div>
       <Paginacao total={extrato.movimentacoes.length} pagina={paginaAtual} onChange={setPagina} />
     </section>
-    {modal && <LancamentoModal modo={modal} units={units} onClose={() => setModal(null)} onSaved={(mensagem) => { setModal(null); recarregar(); toast.success(mensagem); }} />}
+    {modal && <LancamentoModal modo={modal} units={units} tipos={tipos.filter((tipo) => tipo.ativo)} onClose={() => setModal(null)} onSaved={(mensagem) => { setModal(null); recarregar(); toast.success(mensagem); }} />}
   </>;
 }
 
-function LancamentoModal({ modo, units, onClose, onSaved }: { modo: 'movimentacao' | 'transferencia'; units: Unit[]; onClose: () => void; onSaved: (mensagem: string) => void }) {
+function LancamentoModal({ modo, units, tipos, onClose, onSaved }: { modo: 'movimentacao' | 'transferencia'; units: Unit[]; tipos: TipoCofre[]; onClose: () => void; onSaved: (mensagem: string) => void }) {
   const transferencia = modo === 'transferencia';
   const [form, setForm] = useState({ unidade: '', destino: '', tipo: '', sentido: '', data: formatDay(diaBrasilia(new Date())), observacao: '' });
   // o valor é a soma das cédulas e moedas contadas
   const [cedulas, setCedulas] = useState<Counts>({});
   const [erro, setErro] = useState('');
-  const pedeSentido = comSentido.includes(form.tipo);
-  const sai = !transferencia && (tiposDeSaida.includes(form.tipo) || (pedeSentido && form.sentido === 'saida'));
-  const entra = !transferencia && (form.tipo === 'aporte' || (pedeSentido && form.sentido === 'entrada'));
+  // o sentido vem do tipo; no tipo "ambos", quem lança escolhe
+  const tipo = tipos.find((item) => String(item.id) === form.tipo);
+  const pedeSentido = tipo?.sentido === 'ambos';
+  const sentido = pedeSentido ? form.sentido : tipo?.sentido;
+  const pedeObservacao = !!tipo?.exige_observacao;
+  const sai = !transferencia && sentido === 'saida';
+  const entra = !transferencia && sentido === 'entrada';
   async function salvar(event: React.FormEvent) {
     event.preventDefault(); setErro('');
     const data = parseDate(form.data);
@@ -176,7 +180,7 @@ function LancamentoModal({ modo, units, onClose, onSaved }: { modo: 'movimentaca
     if (!countsTotal(cedulas)) return setErro('Informe a quantidade das cédulas e moedas.');
     const corpo = transferencia
       ? { origem: Number(form.unidade), destino: Number(form.destino), cedulas: countsPayload(cedulas), data, observacao: form.observacao }
-      : { unidade_id: Number(form.unidade), tipo: form.tipo, ...(pedeSentido ? { sentido: form.sentido } : {}), cedulas: countsPayload(cedulas), data, observacao: form.observacao };
+      : { unidade_id: Number(form.unidade), tipo_id: Number(form.tipo), ...(pedeSentido ? { sentido: form.sentido } : {}), cedulas: countsPayload(cedulas), data, observacao: form.observacao };
     try { const resposta = await request(transferencia ? '/cofre/transferencias' : '/cofre/movimentacoes', { method: 'POST', body: JSON.stringify(corpo) }); onSaved(resposta.mensagem); } catch (err) { setErro((err as Error).message); }
   }
   const seletorUnidade = (rotulo: string, campo: 'unidade' | 'destino') => <label>{rotulo}<select value={form[campo]} onChange={(event) => setForm({ ...form, [campo]: event.target.value })} required><option value="">Selecione</option>{units.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>;
@@ -185,7 +189,7 @@ function LancamentoModal({ modo, units, onClose, onSaved }: { modo: 'movimentaca
     {transferencia ? <div className="form-grid">{seletorUnidade('Sai do cofre de', 'unidade')}{seletorUnidade('Entra no cofre de', 'destino')}</div> : <>
       {seletorUnidade('Unidade', 'unidade')}
       <div className="form-grid">
-        <label>Tipo<select value={form.tipo} onChange={(event) => setForm({ ...form, tipo: event.target.value })} required><option value="">Selecione</option>{tiposManuais.map((tipo) => <option key={tipo} value={tipo}>{nomesTipo[tipo]}</option>)}</select></label>
+        <label>Tipo<select value={form.tipo} onChange={(event) => setForm({ ...form, tipo: event.target.value })} required><option value="">{tipos.length ? 'Selecione' : 'Nenhum tipo ativo'}</option>{tipos.map((item) => <option key={item.id} value={item.id}>{item.nome}</option>)}</select></label>
         {pedeSentido && <label>Sentido<select value={form.sentido} onChange={(event) => setForm({ ...form, sentido: event.target.value })} required><option value="">Selecione</option><option value="entrada">Entra no cofre</option><option value="saida">Sai do cofre</option></select></label>}
       </div>
     </>}
@@ -196,7 +200,7 @@ function LancamentoModal({ modo, units, onClose, onSaved }: { modo: 'movimentaca
       counts={cedulas} onChange={setCedulas} />
     <div className="form-grid">
       <label>Data<DataInput label="Data da movimentação" value={form.data} onChange={(data) => setForm({ ...form, data })} /></label>
-      <label>Observação{pedeSentido ? '' : ' (opcional)'}<input maxLength={limites.observacaoCofre} value={form.observacao} onChange={(event) => setForm({ ...form, observacao: event.target.value })} required={pedeSentido} placeholder={form.tipo === 'ajuste' ? 'Ex.: saldo inicial, contagem do cofre' : ''} /></label>
+      <label>Observação{pedeObservacao ? '' : ' (opcional)'}<input maxLength={limites.observacaoCofre} value={form.observacao} onChange={(event) => setForm({ ...form, observacao: event.target.value })} required={pedeObservacao} placeholder={pedeObservacao ? 'Explique a movimentação' : ''} /></label>
     </div>
     {erro && <div className="alert">{erro}</div>}
     <div className="modal-footer"><button type="button" className="ghost" onClick={onClose}>Cancelar</button><button className="primary" type="submit">{transferencia ? 'Transferir' : 'Lançar movimentação'}</button></div>
