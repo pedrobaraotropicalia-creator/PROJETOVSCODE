@@ -45,8 +45,13 @@ async function saldo(unidadeId: number) {
   const { corpo } = await api('GET', '/cofre');
   return corpo.find((item: { unidade_id: number }) => item.unidade_id === unidadeId) as { total: number; fundo_gaveta: number; cedulas: Cedula[]; cedulas_gaveta: Cedula[] };
 }
-async function extrato(filtro = '') {
-  return (await api('GET', `/cofre/movimentacoes${filtro}`)).corpo as { movimentacoes: { tipo: string; valor: number; unidade_id: number; movimentacao_id: number | null; ativo: number; cedulas: Cedula[] }[]; totais: { tipo: string; entradas: number; saidas: number }[] };
+async function extrato(filtro = '', comoToken = token) {
+  return (await api('GET', `/cofre/movimentacoes${filtro}`, undefined, comoToken)).corpo as { movimentacoes: { tipo: string; valor: number; unidade_id: number; movimentacao_id: number | null; ativo: number; cedulas: Cedula[] }[]; totais: { tipo: string; entradas: number; saidas: number }[] };
+}
+async function admin(emailAdmin: string, unidadesAdmin: number[], cargo?: string) {
+  const { corpo } = await api('POST', '/auth/register', { nome: 'Gerente', email: emailAdmin, senha, confirmacao: senha });
+  await api('PATCH', `/usuarios/${corpo.usuario.id}`, { tipo: 'admin', unidades: unidadesAdmin, ...(cargo ? { cargo } : {}) });
+  return (await api('POST', '/auth/login', { email: emailAdmin, senha })).corpo.token as string;
 }
 
 beforeAll(async () => {
@@ -224,6 +229,50 @@ describe('cofre', () => {
     await api('DELETE', `/cofre/movimentacoes/${corpo.id}`);
     expect([(await saldo(origem)).cedulas, (await saldo(destino)).cedulas]).toEqual([[], []]);
     expect((await extrato(`?unidades=${origem}&excluidas=1`)).movimentacoes).toMatchObject([{ ativo: 0, cedulas }]);
+  });
+
+  it('o admin gere o cofre só das unidades vinculadas e transfere só entre elas; o colaborador não acessa', async () => {
+    const criar = async (nome: string) => (await api('POST', '/unidades', { nome })).corpo.id as number;
+    const [minha, segunda, alheia] = [await criar('COFRE ADMIN A'), await criar('COFRE ADMIN B'), await criar('COFRE ALHEIO')];
+    const tokenAdmin = await admin('gerente-cofre@cofre.test', [minha, segunda]);
+    const comoAdmin = (metodo: string, caminho: string, corpo?: unknown) => api(metodo, caminho, corpo, tokenAdmin);
+    const daAlheia = (await api('POST', '/cofre/movimentacoes', { unidade_id: alheia, tipo: 'aporte', cedulas: notas(70), data: hoje })).corpo.id;
+    // saldos e extrato só das vinculadas, mesmo filtrando por outra unidade
+    expect((await comoAdmin('GET', '/cofre')).corpo.map((item: { unidade_id: number }) => item.unidade_id)).toEqual([minha, segunda]);
+    expect((await extrato(`?unidades=${alheia}`, tokenAdmin)).movimentacoes).toEqual([]);
+    expect((await comoAdmin('POST', '/cofre/movimentacoes', { unidade_id: alheia, tipo: 'aporte', cedulas: notas(10), data: hoje })).status).toBe(403);
+    const lancado = await comoAdmin('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', cedulas: notas(100), data: hoje });
+    expect(lancado.status).toBe(201);
+    expect((await comoAdmin('POST', '/cofre/transferencias', { origem: minha, destino: alheia, cedulas: notas(10), data: hoje })).status).toBe(403);
+    expect((await comoAdmin('POST', '/cofre/transferencias', { origem: minha, destino: segunda, cedulas: notas(40), data: hoje })).status).toBe(201);
+    expect([(await saldo(minha)).total, (await saldo(segunda)).total, (await saldo(alheia)).total]).toEqual([60, 40, 70]);
+    // a transferência que o dono fez da unidade alheia aparece na vinculada, mas o admin não a exclui
+    const doDono = (await api('POST', '/cofre/transferencias', { origem: alheia, destino: minha, cedulas: notas(20), data: hoje })).corpo.id;
+    const { movimentacoes } = await extrato('', tokenAdmin);
+    expect(movimentacoes.every((mov) => [minha, segunda].includes(mov.unidade_id))).toBe(true);
+    expect(movimentacoes.some((mov) => mov.tipo === 'transferencia' && mov.valor === 20)).toBe(true);
+    expect((await comoAdmin('DELETE', `/cofre/movimentacoes/${doDono}`)).status).toBe(403);
+    expect((await comoAdmin('DELETE', `/cofre/movimentacoes/${daAlheia}`)).status).toBe(403);
+    expect((await comoAdmin('DELETE', `/cofre/movimentacoes/${lancado.corpo.id}`)).status).toBe(200);
+    expect((await saldo(minha)).total).toBe(-20);
+    const { corpo } = await api('POST', '/auth/register', { nome: 'Operador', email: 'operador-cofre@cofre.test', senha, confirmacao: senha });
+    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { unidades: [minha] });
+    const tokenColaborador = (await api('POST', '/auth/login', { email: 'operador-cofre@cofre.test', senha })).corpo.token;
+    expect((await api('GET', '/cofre', undefined, tokenColaborador)).status).toBe(403);
+    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', cedulas: notas(1), data: hoje }, tokenColaborador)).status).toBe(403);
+  });
+
+  it('o admin com cargo Caixa não acessa o cofre, nem pela auditoria', async () => {
+    const unidade = (await api('POST', '/unidades', { nome: 'COFRE CARGO CAIXA' })).corpo.id;
+    const tokenCaixa = await admin('caixa-cofre@cofre.test', [unidade], 'Caixa');
+    const lancado = (await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', cedulas: notas(30), data: hoje })).corpo.id;
+    expect((await api('GET', '/cofre', undefined, tokenCaixa)).status).toBe(403);
+    expect((await api('GET', '/cofre/movimentacoes', undefined, tokenCaixa)).status).toBe(403);
+    expect((await api('POST', '/cofre/movimentacoes', { unidade_id: unidade, tipo: 'aporte', cedulas: notas(1), data: hoje }, tokenCaixa)).status).toBe(403);
+    expect((await api('DELETE', `/cofre/movimentacoes/${lancado}`, undefined, tokenCaixa)).status).toBe(403);
+    const visto = (await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`, undefined, tokenCaixa)).corpo as { entidade: string; entidade_id: number }[];
+    expect(visto.some((item) => item.entidade === 'cofre')).toBe(false);
+    expect(visto.some((item) => item.entidade === 'unidade' && item.entidade_id === unidade)).toBe(true);
   });
 });
 
@@ -471,18 +520,21 @@ describe('auditoria', () => {
     expect((await ultimas()).find((item) => item.entidade === 'usuario' && item.entidade_id === corpo.usuario.id)).toMatchObject({ acao: 'Cadastrou-se', usuario_nome: 'Curioso' });
   });
 
-  it('o admin vê o que já enxerga: só as unidades vinculadas, sem o cofre', async () => {
+  it('o admin vê o que já enxerga: só as unidades vinculadas, inclusive no cofre', async () => {
     const [minha, outra] = [unidades[0].id, unidades[1].id];
     const { corpo } = await api('POST', '/auth/register', { nome: 'Supervisora', email: 'supervisora@cofre.test', senha, confirmacao: senha });
     await api('PATCH', `/usuarios/${corpo.usuario.id}`, { tipo: 'admin', unidades: [minha] });
     const tokenAdmin = (await api('POST', '/auth/login', { email: 'supervisora@cofre.test', senha })).corpo.token;
     const [daMinha, daOutra] = [await caixa(minha, 10, 10), await caixa(outra, 10, 10)];
-    await api('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', cedulas: notas(5), data: hoje });
+    const cofreMinha = (await api('POST', '/cofre/movimentacoes', { unidade_id: minha, tipo: 'aporte', cedulas: notas(5), data: hoje })).corpo.id;
+    const cofreOutra = (await api('POST', '/cofre/movimentacoes', { unidade_id: outra, tipo: 'aporte', cedulas: notas(5), data: hoje })).corpo.id;
+    // a transferência fica gravada na origem, mas o destino também a vê
+    const paraMinha = (await api('POST', '/cofre/transferencias', { origem: outra, destino: minha, cedulas: notas(3), data: hoje })).corpo.id;
     const visto = (await api('GET', `/auditoria?de=${hoje}&ate=${hoje}`, undefined, tokenAdmin)).corpo as Registro[];
-    expect(visto.some((item) => item.entidade === 'caixa' && item.entidade_id === daMinha)).toBe(true);
-    expect(visto.some((item) => item.entidade === 'caixa' && item.entidade_id === daOutra)).toBe(false);
-    expect(visto.some((item) => item.entidade === 'cofre')).toBe(false);
-    expect(visto.some((item) => item.entidade === 'usuario' && item.entidade_id === corpo.usuario.id)).toBe(true);
+    const viu = (entidade: string, id: number) => visto.some((item) => item.entidade === entidade && item.entidade_id === id);
+    expect([viu('caixa', daMinha), viu('caixa', daOutra)]).toEqual([true, false]);
+    expect([viu('cofre', cofreMinha), viu('cofre', cofreOutra), viu('cofre', paraMinha)]).toEqual([true, false, true]);
+    expect(viu('usuario', corpo.usuario.id)).toBe(true);
   });
 });
 
@@ -491,11 +543,6 @@ describe('vouchers', () => {
   const somarDias = (dia: string, dias: number) => new Date(Date.parse(`${dia}T12:00:00Z`) + dias * 86_400_000).toISOString().slice(0, 10);
   const luhnValido = (codigo: string) => [...codigo].reverse().reduce((soma, digito, indice) => { const valor = Number(digito) * (indice % 2 === 1 ? 2 : 1); return soma + (valor > 9 ? valor - 9 : valor); }, 0) % 10 === 0;
   const novo = (dados: Record<string, unknown> = {}) => api('POST', '/vouchers', { unidade_id: unidades[0].id, valor: 50, email: 'cliente@exemplo.com', nome: 'Cliente da Sala', ...dados });
-  async function admin(emailAdmin: string, unidadesAdmin: number[]) {
-    const { corpo } = await api('POST', '/auth/register', { nome: 'Gerente', email: emailAdmin, senha, confirmacao: senha });
-    await api('PATCH', `/usuarios/${corpo.usuario.id}`, { tipo: 'admin', unidades: unidadesAdmin });
-    return (await api('POST', '/auth/login', { email: emailAdmin, senha })).corpo.token as string;
-  }
 
   it('sem código, o server gera 13 dígitos com verificador; emissão hoje e validade de 7 dias', async () => {
     const { status, corpo } = await novo({ email: 'Bruna@Exemplo.com' });

@@ -84,6 +84,7 @@ function CedulasDaMovimentacao({ mov }: { mov: Movimentacao }) {
   </div>;
 }
 
+/** Cofre de cada unidade: o dono vê todas; o admin, só as vinculadas (units já vem filtrada), e só transfere entre elas. */
 export default function Cofre({ units, recarga, onAbrirCaixa }: { units: Unit[]; recarga: number; onAbrirCaixa: (id: number) => void }) {
   const { confirmar } = useDialogos();
   const [saldos, setSaldos] = useState<Saldo[]>([]);
@@ -126,7 +127,7 @@ export default function Cofre({ units, recarga, onAbrirCaixa }: { units: Unit[];
     </article>)}</section>
     {saldoAberto && <PainelLateral eyebrow="CÉDULAS E MOEDAS" titulo={saldoAberto.nome} onClose={() => setComposicao(null)}><ComposicaoSaldo saldo={saldoAberto} /></PainelLateral>}
     <section className="panel">
-      <div className="panel-heading cofre-cabecalho"><div><span className="eyebrow">DINHEIRO EM ESPÉCIE</span><h2>Movimentações</h2></div><div className="row-actions"><button type="button" className="ghost" onClick={() => setModal('transferencia')}>Transferir</button><button type="button" className="primary" onClick={() => setModal('movimentacao')}><Icone nome="adicionar" /> Nova movimentação</button></div></div>
+      <div className="panel-heading cofre-cabecalho"><div><span className="eyebrow">DINHEIRO EM ESPÉCIE</span><h2>Movimentações</h2></div><div className="row-actions">{units.length > 1 && <button type="button" className="ghost" onClick={() => setModal('transferencia')}>Transferir</button>}<button type="button" className="primary" onClick={() => setModal('movimentacao')}><Icone nome="adicionar" /> Nova movimentação</button></div></div>
       <div className="filters close-filters report-filters">
         <label className="report-date">De<DataInput label="Data inicial" value={filtro.de} onChange={(valor) => setFiltro({ ...filtro, de: valor })} /></label>
         <label className="report-date">Até<DataInput label="Data final" value={filtro.ate} onChange={(valor) => setFiltro({ ...filtro, ate: valor })} /></label>

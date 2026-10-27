@@ -13,5 +13,5 @@ export const cargos = [
 
 export const nomesCargos = cargos.map((cargo) => cargo.nome);
 
-/** Cargo Caixa (sem diferenciar maiúsculas, para valer também em cargos antigos): fora o dono, só vê os próprios caixas, mesmo com perfil admin. */
+/** Cargo Caixa (sem diferenciar maiúsculas, para valer também em cargos antigos): fora o dono, só vê os próprios caixas e não acessa o cofre, mesmo com perfil admin. */
 export const cargoRestringe = (cargo: string | null | undefined) => String(cargo || '').trim().toLowerCase() === 'caixa';
